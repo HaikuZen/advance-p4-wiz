@@ -1,0 +1,10 @@
+# append under `dependencies:` in main/idf_component.yml - option B: esp_hosted 3.x
+# (documented back-compatible with the C6's 2.x firmware; upgrading the C6 recommended)
+  espressif/esp_hosted:
+    version: "^3.0"
+    rules:
+      - if: "target == esp32p4"
+  espressif/esp_wifi_remote:
+    version: "*"
+    rules:
+      - if: "target == esp32p4"
