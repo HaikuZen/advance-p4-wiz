@@ -109,6 +109,36 @@ uses the wrong pins. `--check` catches that.
 **After you edit `sdkconfig.defaults`**, delete the generated `sdkconfig` and
 rebuild: `sdkconfig.defaults` only applies to a fresh `sdkconfig`.
 
+### Wi-Fi: set the network to join
+
+With `--wifi`, the app scans at boot, then joins a network. There are two
+ways to set it:
+
+- **On screen** (no rebuild): tap the Wi-Fi button in the top-left corner,
+  pick a network from the list, type the password, and press Connect. The
+  network is saved on the board once it has connected, and kept across
+  reboots until you press **Forget**.
+- **In menuconfig**, as a fallback when nothing is saved on screen:
+
+  ```sh
+  idf.py menuconfig        # CrowPanel Wi-Fi > Network name (SSID) / Password, then save
+  idf.py build
+  ```
+
+  The values go in the generated `sdkconfig`, which the project's
+  `.gitignore` keeps out of git. Don't put them in `sdkconfig.defaults`,
+  which is committed.
+
+The log shows `connected to "...", IP ...` once it has joined, or the reason
+it couldn't.
+
+> **The password is stored in plain text** either way: one from menuconfig is
+> compiled into `build/*.bin`, and one typed on screen is saved in the board's
+> flash. Anyone with those `.bin` files, or a flash backup, can read it.
+> **Don't share or upload builds or backups made with your real password**
+> (for example as release files in a public repo); build those with the
+> password empty.
+
 ## 4. Flash
 
 **Flashing replaces the firmware on the board, Elecrow's factory demo
@@ -184,13 +214,14 @@ Tested on a CrowPanel Advanced **10.1" V1.2** with a rev v1.3 P4, on ESP-IDF
 |---|---|
 | base app: panel, touch, backlight, colours | built, **flashed, works** |
 | AI digit demo | built, **flashed, works** (~3 ms per digit) |
-| Wi-Fi, esp_hosted 2.12.x (`hosted2`) | built, **flashed: the scan works** (the C6 answers, nearby networks listed). Joining a network: not tried yet |
+| Wi-Fi, esp_hosted 2.12.x (`hosted2`) | built, **flashed, works**: the scan, and joining a WPA2 network set on screen (IP by DHCP, saved across reboots by design). The menuconfig network and reconnecting after a drop: not tried yet |
 | Wi-Fi, esp_hosted 3.x (`hosted3`) | built only |
 | speaker | built only on IDF 6. Works on the same board under IDF 5.4 |
 | `--chip-rev v3` | built only. No rev v3 board tried |
 | 7" panel | not tried |
 
-**Joining a Wi-Fi network is the part most likely to need fixes.**
+**Wi-Fi beyond the first join (reconnects, other networks, esp_hosted 3.x) is
+the part most likely to need fixes.**
 
 ## What's in this repository
 

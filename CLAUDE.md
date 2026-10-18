@@ -12,7 +12,7 @@ plus the verified building blocks it assembles.
 | `README.md` | for users of the public repo: running the wizard, building and flashing an app, what's tested. Keep its status table in step with the verification status below |
 | `docs/advance-p4-cookbook.md` | the full manual recipe, step by step, with every pitfall. **Read it first**: the wizard automates it |
 | `template/base/` | a complete app: 1024x600 MIPI-DSI panel, GT911 touch, LVGL 9 without tearing, PWM backlight, and a demo screen (RGB bars, a touch dot, a brightness slider). Builds as is |
-| `template/modules/wifi/` | Wi-Fi through the onboard ESP32-C6 (esp_hosted): `wifi.c/h` (init + one scan), with config and dependency fragments for esp_hosted **2.12.x** (`*hosted2*`, recommended) or **3.x** (`*hosted3*`) |
+| `template/modules/wifi/` | Wi-Fi through the onboard ESP32-C6 (esp_hosted): `wifi.c/h` (one Wi-Fi task: a scan, then join the network saved on screen in NVS, else the menuconfig one, and keep rejoining), `wifi_ui.c` (on-screen setup: a status button, a scan list, a password field, Forget), `Kconfig.projbuild` (the menuconfig fallback network), with config and dependency fragments for esp_hosted **2.12.x** (`*hosted2*`, recommended) or **3.x** (`*hosted3*`) |
 | `template/modules/audio/` | the speaker: plain I2S, no codec (`audio_init`, `audio_beep`) |
 | `template/modules/ai/` | AI demo: a drawing pad, and an int8 CNN that ESP-DL runs on the P4 names the digit. `models/digit.espdl` is built by `tools/train_digit_model.py` |
 | `tools/train_digit_model.py` | trains the digit CNN on MNIST (augmented toward finger strokes) and exports it with esp-ppq. Needs `tools/requirements-ai.txt` in a Python 3.12 venv; see its docstring |
@@ -49,13 +49,20 @@ The wizard must apply each of these steps. `tools/assemble_reference.sh` does
 all of them.
 
 - **Wi-Fi:**
-  - copy `wifi.c/.h` into `main/`;
+  - copy `wifi.c/.h`, `wifi_ui.c` and `Kconfig.projbuild` into `main/`;
   - append the chosen `idf_component.hostedN.yml` under `dependencies:` in
     `main/idf_component.yml`;
   - append `sdkconfig.hostedN` to `sdkconfig.defaults`;
-  - in `main/CMakeLists.txt`, add `"wifi.c"` to SRCS and
+  - in `main/CMakeLists.txt`, add `"wifi.c" "wifi_ui.c"` to SRCS and
     `esp_wifi esp_netif esp_event nvs_flash` to REQUIRES;
-  - call `wifi_scan_once()` at the end of `app_main`.
+  - call `wifi_ui_create(lv_screen_active())` right after `build_ui()`, inside
+    the LVGL lock;
+  - call `wifi_start()` at the end of `app_main`.
+  - The network is set per project in `idf.py menuconfig` > CrowPanel Wi-Fi, so
+    it lands in `sdkconfig` (gitignored). **Never** have the wizard write a
+    password into `sdkconfig.defaults`: that file is committed. Either way
+    (menuconfig into the firmware, or on screen into NVS) the password is in
+    flash as plain text: the docs warn against sharing such builds or backups.
 - **Audio:**
   - copy `audio.c/.h` into `main/`;
   - in `main/CMakeLists.txt`, add `"audio.c"` to SRCS and `esp_driver_i2s` to
@@ -116,7 +123,11 @@ on the bench 10.1":
   identified the esp32c6, and the scan listed 8 networks ~7.5 s after boot.
   The UI was up before it. No reset in 40 s;
 - esp_hosted warns `CONFIG_FREERTOS_HZ is 100, ESP-Hosted recommended 1000`;
-- joining a network: untested (`wifi.c` only scans);
+- **joining works** (ArtShow updated with the join code): set on screen with
+  `wifi_ui.c`, it joined a WPA2 network ~6 s after Connect, got an IP by DHCP
+  and saved the network in NVS. Not yet seen: the rejoin after a reboot, a
+  dropped link, a wrong password, the menuconfig network. The join code also
+  builds clean in Wi-Fi 2.12.x + audio + AI and Wi-Fi 3.x + audio;
 - audio: no errors in the log; the boot beep not yet confirmed by ear.
 
 The board values (pins, panel timings,
@@ -125,8 +136,8 @@ proven on the bench board by a working port on IDF 5.4.1: the pocket-tank
 firmware, `../pocket-tank`, branch `advance-p4-support`. See
 `docs/board-crowpanel-p4.md` and `firmware/main/display_port_dsi.c` there.
 
-**Wi-Fi has never joined a network** (the scan works with esp_hosted 2.12.x;
-3.x has not run). Joining is the most likely part to need fixes.
+**Wi-Fi joins a network** with esp_hosted 2.12.x (on screen, 2026-10-18).
+esp_hosted 3.x has not run on the board.
 
 ## Things the wizard must get right
 

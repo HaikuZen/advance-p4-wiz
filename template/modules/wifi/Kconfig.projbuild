@@ -1,0 +1,18 @@
+menu "CrowPanel Wi-Fi"
+
+    config APP_WIFI_SSID
+        string "Network name (SSID)"
+        default ""
+        help
+            The network to join at boot. Empty: only scan, and join nothing.
+            Set it here (idf.py menuconfig): it is kept in sdkconfig, which the
+            project's .gitignore keeps out of git. Don't put it in
+            sdkconfig.defaults, which is committed.
+
+    config APP_WIFI_PASSWORD
+        string "Password"
+        default ""
+        help
+            The network's password. Empty for an open network.
+
+endmenu

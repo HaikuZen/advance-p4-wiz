@@ -150,7 +150,7 @@ def assemble(dest, name, wifi, audio, ai, rev):
 
     if wifi:
         n = wifi[-1]   # "hosted2" -> "2"
-        for f in ("wifi.c", "wifi.h"):
+        for f in ("wifi.c", "wifi.h", "wifi_ui.c", "Kconfig.projbuild"):   # the last: the menuconfig network
             shutil.copy(os.path.join(MODS, "wifi", f), main)
         with open(os.path.join(MODS, "wifi", f"idf_component.hosted{n}.yml")) as f:
             dep = "".join(l for l in f if not l.startswith("#"))
@@ -160,9 +160,10 @@ def assemble(dest, name, wifi, audio, ai, rev):
             frag = f.read()
         with open(os.path.join(dest, "sdkconfig.defaults"), "a") as f:
             f.write("\n" + frag)
-        srcs.append('"wifi.c"')
+        srcs += ['"wifi.c"', '"wifi_ui.c"']
         reqs += ["esp_wifi", "esp_netif", "esp_event", "nvs_flash"]
         includes.append('#include "wifi.h"')
+        ui.append("        wifi_ui_create(lv_screen_active());")
 
     if audio:
         for f in ("audio.c", "audio.h"):
@@ -192,7 +193,7 @@ def assemble(dest, name, wifi, audio, ai, rev):
         ui.append("        digit_ui_create(lv_screen_active());")
 
     if wifi:
-        calls.append("    wifi_scan_once();")   # last: the scan blocks
+        calls.append("    wifi_start();")   # last: its scan blocks
 
     if srcs:
         edit(os.path.join(main, "CMakeLists.txt"), lambda s: replace_once(

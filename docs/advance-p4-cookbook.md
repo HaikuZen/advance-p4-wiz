@@ -625,26 +625,240 @@ CONFIG_EH_HOST_PORT_DMA_PREFER_SPIRAM=y
 CONFIG_ESP_HOSTED_DFLT_TASK_FROM_SPIRAM=y
 ```
 
-### `main/wifi.c`: bring it up and scan once
+### `main/wifi.c`: one task for Wi-Fi
+
+Every `esp_wifi_*` call is an RPC to the C6, and a scan blocks for ~2.5 s, so
+one task does them all. The UI and the event handlers post it messages. It
+scans once for the log, joins the network saved on screen (NVS) or else the
+menuconfig one, and rejoins after each drop with a backoff.
 
 ```c
 /* wifi.c - Wi-Fi through the onboard ESP32-C6 (esp_hosted): the plain
- * esp_wifi API, forwarded to the C6 over SDIO by esp_wifi_remote. */
+ * esp_wifi API, forwarded to the C6 over SDIO by esp_wifi_remote.
+ * One task owns every esp_wifi call (each is an RPC to the C6): it scans, joins
+ * the network saved on screen (NVS) or else the menuconfig one, and rejoins
+ * after each drop. Everyone else just posts it a message. */
 #include "wifi.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "esp_event.h"
 #include "nvs_flash.h"
+#include "nvs.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
+#include <stdio.h>
+#include <string.h>
+
+#define NVS_NS "p4wifi"   /* the network saved from the screen */
 
 static const char *TAG = "wifi";
+
+typedef enum { M_SCAN, M_JOIN, M_FORGET, M_DROPPED, M_GOT_IP } msg_kind_t;
+typedef struct {
+    msg_kind_t kind;
+    wifi_scan_cb_t scan_cb;
+    int reason;
+    esp_ip4_addr_t ip;
+    char ssid[33], pass[65];
+} msg_t;
+
+static QueueHandle_t s_q;
+static wifi_status_cb_t s_status_cb;
+static volatile bool s_connected;
+/* the Wi-Fi task's own state */
+static char s_ssid[33], s_pass[65];
+static bool s_have, s_save, s_leaving, s_retry;
+static int s_tries;
+static TickType_t s_retry_at;
 
 /* a failed step logs and gives up on Wi-Fi only: the rest of the app keeps
    running. The C6 link is unproven, and ESP_ERROR_CHECK would reboot the board */
 #define TRY(x) do { esp_err_t e_ = (x); \
-        if (e_ != ESP_OK) { ESP_LOGE(TAG, "%s: %s - no Wi-Fi", #x, esp_err_to_name(e_)); return; } } while (0)
+        if (e_ != ESP_OK) { ESP_LOGE(TAG, "%s: %s - no Wi-Fi", #x, esp_err_to_name(e_)); status(WIFI_OFF, esp_err_to_name(e_)); return; } } while (0)
 
-void wifi_scan_once(void) {
+static void status(wifi_state_t st, const char *detail) {
+    s_connected = st == WIFI_CONNECTED;
+    if (s_status_cb) s_status_cb(st, s_ssid, detail ? detail : "");
+}
+
+static void post(const msg_t *m) {
+    if (!s_q || xQueueSend(s_q, m, 0) != pdTRUE) ESP_LOGW(TAG, "Wi-Fi not running, or busy: dropped a request");
+}
+
+bool wifi_connected(void) { return s_connected; }
+void wifi_on_status(wifi_status_cb_t cb) { s_status_cb = cb; }
+void wifi_scan(wifi_scan_cb_t cb) { post(&(msg_t){ .kind = M_SCAN, .scan_cb = cb }); }
+void wifi_forget(void) { post(&(msg_t){ .kind = M_FORGET }); }
+
+void wifi_join(const char *ssid, const char *password) {
+    msg_t m = { .kind = M_JOIN };
+    snprintf(m.ssid, sizeof m.ssid, "%s", ssid);
+    snprintf(m.pass, sizeof m.pass, "%s", password ? password : "");
+    post(&m);
+}
+
+static void do_scan(wifi_scan_cb_t cb) {
+    static wifi_ap_record_t ap[WIFI_MAX_NETS];
+    static wifi_net_t nets[WIFI_MAX_NETS];
+    uint16_t total = 0, max = WIFI_MAX_NETS;
+    esp_err_t err = esp_wifi_scan_start(NULL, true);   /* blocking, ~2.5 s */
+    if (err == ESP_OK) esp_wifi_scan_get_ap_num(&total);
+    if (err == ESP_OK) err = esp_wifi_scan_get_ap_records(&max, ap);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "scan: %s", esp_err_to_name(err));
+        if (cb) cb(NULL, -1);
+        return;
+    }
+    int n = 0;   /* strongest first already; one entry per name, hidden ones out */
+    for (int i = 0; i < max; i++) {
+        const char *name = (const char *)ap[i].ssid;
+        bool dup = !name[0];
+        for (int j = 0; j < n && !dup; j++) dup = !strcmp(nets[j].ssid, name);
+        if (dup) continue;
+        snprintf(nets[n].ssid, sizeof nets[n].ssid, "%s", name);
+        nets[n].rssi = ap[i].rssi;
+        nets[n].open = ap[i].authmode == WIFI_AUTH_OPEN;
+        n++;
+    }
+    ESP_LOGI(TAG, "%u networks, %d listed", total, n);
+    for (int i = 0; i < n; i++) ESP_LOGI(TAG, "  %-32s rssi %d%s", nets[i].ssid, nets[i].rssi, nets[i].open ? "  (open)" : "");
+    if (cb) cb(nets, n);
+}
+
+/* try again in 1, 2, 4 ... up to 30 s */
+static void retry_later(int reason) {
+    char detail[48];
+    s_tries++;
+    int wait = s_tries < 6 ? 1 << (s_tries - 1) : 30;
+    s_retry = true;
+    s_retry_at = xTaskGetTickCount() + pdMS_TO_TICKS(wait * 1000);
+    ESP_LOGW(TAG, "not connected to \"%s\" (reason %d), retry in %d s", s_ssid, reason, wait);
+    snprintf(detail, sizeof detail, "reason %d, retry in %d s", reason, wait);
+    status(WIFI_RETRYING, detail);
+}
+
+static void apply_and_connect(void) {
+    wifi_config_t wc = { 0 };
+    memcpy(wc.sta.ssid, s_ssid, strlen(s_ssid));
+    memcpy(wc.sta.password, s_pass, strlen(s_pass));
+    /* with a password, refuse anything weaker than WPA2; WPA3 (SAE) works too */
+    wc.sta.threshold.authmode = s_pass[0] ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
+    wc.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
+    esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &wc);
+    if (err == ESP_OK) err = esp_wifi_connect();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "connect: %s", esp_err_to_name(err));
+        retry_later(0);   /* no reason code: the call itself failed */
+        return;
+    }
+    ESP_LOGI(TAG, "joining \"%s\"", s_ssid);
+    status(WIFI_CONNECTING, NULL);
+}
+
+static void save_network(void) {
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_str(h, "ssid", s_ssid);
+    nvs_set_str(h, "pass", s_pass);
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "\"%s\" saved", s_ssid);
+}
+
+static bool load_network(void) {
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        size_t ls = sizeof s_ssid, lp = sizeof s_pass;
+        bool ok = nvs_get_str(h, "ssid", s_ssid, &ls) == ESP_OK && nvs_get_str(h, "pass", s_pass, &lp) == ESP_OK;
+        nvs_close(h);
+        if (ok && s_ssid[0]) {
+            ESP_LOGI(TAG, "network saved on screen: \"%s\"", s_ssid);
+            return true;
+        }
+    }
+    snprintf(s_ssid, sizeof s_ssid, "%s", CONFIG_APP_WIFI_SSID);   /* the menuconfig fallback */
+    snprintf(s_pass, sizeof s_pass, "%s", CONFIG_APP_WIFI_PASSWORD);
+    return s_ssid[0] != 0;
+}
+
+static void handle(const msg_t *m) {
+    char detail[48];
+    switch (m->kind) {
+    case M_SCAN:
+        do_scan(m->scan_cb);
+        break;
+    case M_JOIN:
+        if (s_have) { s_leaving = true; esp_wifi_disconnect(); }
+        memcpy(s_ssid, m->ssid, sizeof s_ssid);
+        memcpy(s_pass, m->pass, sizeof s_pass);
+        s_have = s_save = true;
+        s_tries = 0;
+        s_retry = false;
+        apply_and_connect();
+        break;
+    case M_FORGET: {
+        nvs_handle_t h;
+        if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) { nvs_erase_all(h); nvs_commit(h); nvs_close(h); }
+        if (s_have) { s_leaving = true; esp_wifi_disconnect(); }
+        s_have = s_retry = s_save = false;
+        ESP_LOGI(TAG, "network forgotten");
+        status(WIFI_IDLE, "forgotten");
+        s_ssid[0] = 0;
+        break;
+    }
+    case M_DROPPED:
+        if (m->reason == WIFI_REASON_ASSOC_LEAVE && s_leaving) { s_leaving = false; break; }   /* our own disconnect */
+        if (s_have) retry_later(m->reason);
+        break;
+    case M_GOT_IP:
+        s_tries = 0;
+        s_leaving = false;
+        if (s_save) { save_network(); s_save = false; }
+        snprintf(detail, sizeof detail, IPSTR, IP2STR(&m->ip));
+        ESP_LOGI(TAG, "connected to \"%s\", IP %s", s_ssid, detail);
+        status(WIFI_CONNECTED, detail);
+        break;
+    }
+}
+
+static void wifi_task(void *arg) {
+    msg_t m;
+    do_scan(NULL);   /* one scan for the log */
+    s_have = load_network();
+    if (s_have) apply_and_connect();
+    else {
+        ESP_LOGI(TAG, "no network set (on screen, or idf.py menuconfig > CrowPanel Wi-Fi)");
+        status(WIFI_IDLE, NULL);
+    }
+    for (;;) {
+        TickType_t wait = portMAX_DELAY;
+        if (s_retry) {
+            TickType_t now = xTaskGetTickCount();
+            wait = (int32_t)(s_retry_at - now) > 0 ? s_retry_at - now : 0;
+        }
+        if (xQueueReceive(s_q, &m, wait) == pdTRUE) handle(&m);
+        else { s_retry = false; apply_and_connect(); }   /* the backoff ran out */
+    }
+}
+
+static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data) {
+    msg_t m = { 0 };
+    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        m.kind = M_DROPPED;
+        m.reason = ((const wifi_event_sta_disconnected_t *)data)->reason;
+        s_connected = false;
+    } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+        m.kind = M_GOT_IP;
+        m.ip = ((const ip_event_got_ip_t *)data)->ip_info.ip;
+    } else {
+        return;
+    }
+    post(&m);
+}
+
+void wifi_start(void) {
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         TRY(nvs_flash_erase());
@@ -658,14 +872,13 @@ void wifi_scan_once(void) {
     TRY(esp_wifi_init(&cfg));
     TRY(esp_wifi_set_mode(WIFI_MODE_STA));
     TRY(esp_wifi_start());
-    TRY(esp_wifi_scan_start(NULL, true));   /* blocking */
-    uint16_t n = 0;
-    esp_wifi_scan_get_ap_num(&n);
-    wifi_ap_record_t ap[10];
-    uint16_t max = 10;
-    esp_wifi_scan_get_ap_records(&max, ap);
-    ESP_LOGI(TAG, "%u networks, showing %u", n, max);
-    for (int i = 0; i < max; i++) ESP_LOGI(TAG, "  %-32s ch %2d rssi %d", (char *)ap[i].ssid, ap[i].primary, ap[i].rssi);
+    TRY(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, on_event, NULL));
+    TRY(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_event, NULL));
+    s_q = xQueueCreate(8, sizeof(msg_t));
+    if (!s_q || xTaskCreate(wifi_task, "wifi", 6144, NULL, 5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "no memory for the Wi-Fi task - no Wi-Fi");
+        status(WIFI_OFF, "no memory");
+    }
 }
 ```
 
@@ -673,17 +886,104 @@ void wifi_scan_once(void) {
 
 ```c
 #pragma once
-/* bring up Wi-Fi through the C6 and log one scan */
-void wifi_scan_once(void);
+/* Wi-Fi through the C6. A Wi-Fi task does the work; every call here returns at once */
+#include <stdbool.h>
+#include "lvgl.h"
+
+#define WIFI_MAX_NETS 20
+
+typedef enum { WIFI_OFF, WIFI_IDLE, WIFI_CONNECTING, WIFI_CONNECTED, WIFI_RETRYING } wifi_state_t;
+typedef struct { char ssid[33]; int rssi; bool open; } wifi_net_t;
+/* both callbacks run in the Wi-Fi task: take the LVGL lock to touch the UI.
+ * detail: the IP when connected, the reason when retrying */
+typedef void (*wifi_status_cb_t)(wifi_state_t state, const char *ssid, const char *detail);
+typedef void (*wifi_scan_cb_t)(const wifi_net_t *nets, int n);   /* n < 0: the scan failed */
+
+/* bring up Wi-Fi, log one scan, then join the network saved on screen (NVS), else the
+ * one in menuconfig (CrowPanel Wi-Fi), and rejoin after each drop */
+void wifi_start(void);
+bool wifi_connected(void);
+/* set before wifi_start to see every change */
+void wifi_on_status(wifi_status_cb_t cb);
+void wifi_scan(wifi_scan_cb_t cb);
+/* join this network instead; saved in NVS once it connects (a wrong password never is) */
+void wifi_join(const char *ssid, const char *password);
+/* drop and erase the saved network (the menuconfig one, if any, is back at the next boot) */
+void wifi_forget(void);
+/* the screen's Wi-Fi button and setup panel (wifi_ui.c); call holding the LVGL lock */
+void wifi_ui_create(lv_obj_t *parent);
+```
+
+### `main/wifi_ui.c`: setting the network on screen
+
+Copy it from `template/modules/wifi/wifi_ui.c` (~160 lines). It puts a status
+button in the top-left corner of the demo screen. The button opens a
+full-screen panel on `lv_layer_top()`:
+- the scan list;
+- the chosen network, a password field and an on-screen keyboard (its OK key
+  connects too);
+- Connect, Rescan, Forget and Close;
+- a status line: connecting, connected with the IP, or why it can't join.
+
+The callbacks from `wifi.c` run in the Wi-Fi task, so they take
+`lvgl_port_lock()`. The network is saved in NVS (namespace `p4wifi`) only once
+it has connected, so a mistyped password is never saved. Forget erases it.
+
+### `main/Kconfig.projbuild`: a fallback network, in menuconfig
+
+```
+menu "CrowPanel Wi-Fi"
+
+    config APP_WIFI_SSID
+        string "Network name (SSID)"
+        default ""
+        help
+            The network to join at boot. Empty: only scan, and join nothing.
+            Set it here (idf.py menuconfig): it is kept in sdkconfig, which the
+            project's .gitignore keeps out of git. Don't put it in
+            sdkconfig.defaults, which is committed.
+
+    config APP_WIFI_PASSWORD
+        string "Password"
+        default ""
+        help
+            The network's password. Empty for an open network.
+
+endmenu
 ```
 
 Then:
-- add `"wifi.c"` to `SRCS`;
+- add `"wifi.c" "wifi_ui.c"` to `SRCS`;
 - add `esp_wifi esp_netif esp_event nvs_flash` to `REQUIRES`;
-- call `wifi_scan_once()` at the end of `app_main`.
+- call `wifi_ui_create(lv_screen_active())` right after `build_ui()`, inside
+  the LVGL lock;
+- call `wifi_start()` at the end of `app_main`. It returns at once; the Wi-Fi
+  task does the rest.
 
-**Check:** the boot log shows the C6 answering, with its esp_hosted firmware
-version, and then a list of nearby networks.
+### Which network it joins
+
+1. **The one saved on screen**: tap the Wi-Fi button, pick a network, type
+   the password, Connect. It's kept across reboots until you press Forget.
+2. **Else, the one set in menuconfig**: `idf.py menuconfig` > **CrowPanel
+   Wi-Fi** (SSID, password), then rebuild. It lives in the generated
+   `sdkconfig`, which the project's `.gitignore` keeps out of git. Don't put it
+   in `sdkconfig.defaults`: that file is committed.
+3. **Else, none**: it only scans, and the button reads "set up".
+
+**The password is stored in plain text** either way: one from menuconfig is
+compiled into the firmware (`build/*.bin`), and one typed on screen sits in
+NVS. Both end up in the board's flash, and so in any flash backup. Don't share
+or upload a build or a backup made with a real password, e.g. as a release in a
+public repo. Build it with the password empty for that. ESP-IDF's flash and NVS
+encryption would protect the flash; this scaffold doesn't set them up.
+
+**Check:** the boot log shows the C6 answering, the scan, then
+`joining "..."` and `connected to "...", IP ...`. A failure shows as
+`not connected to "..." (reason N), retry in X s`, with retries 1, 2, 4 ... up
+to 30 s apart; the panel's status line shows the same. The reason codes are
+`wifi_err_reason_t` in `esp_wifi_types_generic.h`: e.g. 15 = 4-way handshake
+timeout and 202 = authentication failed (often a wrong password), 201 = no AP
+found (wrong SSID, or out of range).
 
 ## 11. Optional: the speaker
 
