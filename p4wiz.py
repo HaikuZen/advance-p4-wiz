@@ -68,9 +68,27 @@ def ask_text(question, default):
     return a or default
 
 
+def idf_py():
+    """how to run idf.py from here, or None: on PATH (export.sh), else through
+    $IDF_PATH with the IDF venv's python. EIM's activate script makes idf.py a
+    shell function, which a child process like this one can't see"""
+    if shutil.which("idf.py"):
+        return ["idf.py"]
+    idf_path, venv = os.environ.get("IDF_PATH"), os.environ.get("IDF_PYTHON_ENV_PATH", "")
+    tool = os.path.join(idf_path or "", "tools", "idf.py")
+    if not idf_path or not os.path.isfile(tool):
+        return None
+    py = next((p for p in (os.path.join(venv, "bin", "python"), os.path.join(venv, "Scripts", "python.exe"))
+               if venv and os.path.isfile(p)), None) or shutil.which("python") or shutil.which("python3")
+    return [py, tool] if py else None
+
+
 def run_idf(idf_env, args, cwd, capture=False):
     """run an IDF command, through the wrapper script if one is given"""
-    cmd = ([os.path.abspath(idf_env)] if idf_env else []) + args
+    if idf_env:
+        cmd = [os.path.abspath(idf_env)] + args
+    else:
+        cmd = (idf_py() + args[1:]) if args[0] == "idf.py" else args
     print(f"$ (cd {cwd} && {' '.join(args)})")
     return subprocess.run(cmd, cwd=cwd, text=True, capture_output=capture)
 
@@ -302,9 +320,10 @@ def main():
         a.build = ask_yn("Build it now?", True) if asking else False
 
     # before touching the board or the disk: a build needs an IDF environment
-    if a.build and not a.idf_env and not shutil.which("idf.py"):
-        die("idf.py not found: run the wizard from an ESP-IDF 6.x terminal (. $IDF_PATH/export.sh), "
-            "pass --idf-env SCRIPT (a wrapper that runs a command in one), or drop --build / --flash")
+    if a.build and not a.idf_env and not idf_py():
+        die("idf.py not found, neither on PATH nor through $IDF_PATH: run the wizard from an ESP-IDF 6.x "
+            "terminal (export.sh, or EIM's activate_idf_*.sh), pass --idf-env SCRIPT (a wrapper that runs "
+            "a command in one), or drop --build / --flash")
 
     if a.backup:
         backup(a.port, a.idf_env, a.backup)

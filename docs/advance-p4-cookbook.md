@@ -546,8 +546,9 @@ host and co-processor. On IDF 6.1 the resolver offers both lines:
 | **A (recommended)** | esp_hosted **2.12.x** (2.12.13) + esp_wifi_remote **1.6.3** | same major version as the C6. This pair is what the IDF 5.4 tank port uses. | 2.x option names (below) |
 | **B** | esp_hosted **3.x** (3.0.9) + esp_wifi_remote 1.6.5 | esp_hosted 3.x's migration guide says a 3.x host is **back-compatible** with a 2.x co-processor, but recommends upgrading the C6 to 3.x | **renamed** 3.x option names |
 
-Both build cleanly on IDF 6.1 with the pins below. **Neither has connected to
-a network from a 6.x build yet.** The tank's IDF 5.4 port boots esp_hosted
+Both build cleanly on IDF 6.1 with the pins below. **Option A's scan works on
+the bench board from a 6.x build** (2026-10-18: the C6 identified, 8 networks
+listed); neither option has joined a network yet. The tank's IDF 5.4 port boots esp_hosted
 2.12 against the C6 but hasn't joined a network either. Wi-Fi is the most
 likely place for this cookbook to need corrections.
 

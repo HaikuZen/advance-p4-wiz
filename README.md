@@ -184,12 +184,13 @@ Tested on a CrowPanel Advanced **10.1" V1.2** with a rev v1.3 P4, on ESP-IDF
 |---|---|
 | base app: panel, touch, backlight, colours | built, **flashed, works** |
 | AI digit demo | built, **flashed, works** (~3 ms per digit) |
-| Wi-Fi (both esp_hosted options) | built only. **Has never joined a network**, on any IDF version |
+| Wi-Fi, esp_hosted 2.12.x (`hosted2`) | built, **flashed: the scan works** (the C6 answers, nearby networks listed). Joining a network: not tried yet |
+| Wi-Fi, esp_hosted 3.x (`hosted3`) | built only |
 | speaker | built only on IDF 6. Works on the same board under IDF 5.4 |
 | `--chip-rev v3` | built only. No rev v3 board tried |
 | 7" panel | not tried |
 
-**Wi-Fi is the part most likely to need fixes.**
+**Joining a Wi-Fi network is the part most likely to need fixes.**
 
 ## What's in this repository
 
