@@ -16,7 +16,9 @@ Optional sections add **Wi-Fi** through the onboard ESP32-C6, the
 **Status (2026-10-18):**
 - **Built on ESP-IDF v6.1:** every file in this cookbook, including both Wi-Fi
   options and the audio snippet, compiles with no warnings.
-- **Not yet flashed** from a 6.x build.
+- **Flashed once** from a 6.x build (2026-10-18, base + the AI module): it boots,
+  the panel, touch and AI demo run. That first boot found the DSI clock bug in
+  step 13's table. Colours, touch alignment and tearing not yet checked by eye.
 - **Where the board values come from:** this repository's working port of the
   same board (`firmware/main/display_port_dsi.c`, `docs/board-crowpanel-p4.md`).
   That port runs on the bench 10.1" on IDF 5.4.1. The pins, panel timings, DSI
@@ -218,6 +220,13 @@ static const char *TAG = "board";
 #define DSI_LANES      2
 #define DSI_LANE_MBPS  900    /* Elecrow's verified values (Lesson07, V1.2) */
 #define DPI_CLK_MHZ    51     /* 1414 x 645 per frame with porches: ~56 Hz */
+/* the D-PHY PLL reference: IDF 6's _DEFAULT is XTAL, which only rev >= 3.0 has;
+   a rev v1.x chip abort()s on it inside esp_lcd_new_dsi_bus. PLL_F20M for v1.x */
+#if CONFIG_ESP32P4_SELECTS_REV_LESS_V3
+#define DSI_PHY_CLK    MIPI_DSI_PHY_PLLREF_CLK_SRC_DEFAULT_LEGACY
+#else
+#define DSI_PHY_CLK    MIPI_DSI_PHY_PLLREF_CLK_SRC_DEFAULT
+#endif
 #define BL_PWM_HZ      30000
 #define BL_DUTY_BITS   LEDC_TIMER_11_BIT
 #define BL_DUTY_FLOOR  200    /* of 2047: below it the MT9201 barely lights */
@@ -277,7 +286,7 @@ static void panel_init(void) {
 
     esp_lcd_dsi_bus_handle_t bus;
     const esp_lcd_dsi_bus_config_t bc = { .bus_id = 0, .num_data_lanes = DSI_LANES,
-                                          .phy_clk_src = MIPI_DSI_PHY_PLLREF_CLK_SRC_DEFAULT,
+                                          .phy_clk_src = DSI_PHY_CLK,
                                           .lane_bit_rate_mbps = DSI_LANE_MBPS };
     ESP_ERROR_CHECK(esp_lcd_new_dsi_bus(&bc, &bus));
 
@@ -798,6 +807,7 @@ To retrain (e.g. with your own drawings added): see the docstring of
 | Symptom | Cause | Fix |
 |---|---|---|
 | builds, but the bootloader won't start the app | IDF 6.x targets P4 rev ≥ 3.1 by default; this board is rev v1.x | `CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y` + `CONFIG_ESP32P4_REV_MIN_100=y` (step 3) |
+| `abort()` inside `esp_lcd_new_dsi_bus` at the first boot, nothing logged | IDF 6.1's `MIPI_DSI_PHY_PLLREF_CLK_SRC_DEFAULT` is XTAL, rev >= 3.0 only | `MIPI_DSI_PHY_PLLREF_CLK_SRC_DEFAULT_LEGACY` (PLL_F20M) on rev v1.x (`DSI_PHY_CLK` in step 5) |
 | `pixel_format` is not a member of `esp_lcd_dpi_panel_config_t` | renamed in IDF 6 | `.in_color_format = LCD_COLOR_FMT_RGB565` |
 | `on_refresh_done` deprecated | renamed in IDF 5.5+ | `.on_frame_buf_complete` |
 | screen flips between old and new content | `avoid_tearing` without `direct_mode` / `full_refresh`, or `num_fbs` < 2 | step 5 |

@@ -92,7 +92,21 @@ all of them.
   (`tools/test_digit_prep.py`). **Never run on the board**: neither ESP-DL on
   this chip nor real finger drawings.
 
-**Never flashed from an IDF 6.x build.** The board values (pins, panel timings,
+**Flashed once from an IDF 6.x build (2026-10-18)**, AI-only (base + AI module),
+on the bench 10.1":
+- boots (chip rev v1.3 settings right), 32 MB PSRAM at 200 MHz, I2C scan
+  0x2f 0x5d, GT911 ready, the panel up;
+- the first boot found a base bug: `abort()` in `esp_lcd_new_dsi_bus`. IDF 6.1's
+  `MIPI_DSI_PHY_PLLREF_CLK_SRC_DEFAULT` is XTAL, rev >= 3.0 only. `board.c` now
+  uses `..._DEFAULT_LEGACY` (PLL_F20M) under `CONFIG_ESP32P4_SELECTS_REV_LESS_V3`;
+- the AI demo ran: model loaded, two drawn digits (6 at 88%, 0 at 100%) right,
+  ~3 ms per inference at 360 MHz;
+- two log lines left to look at: `W gpio: conflict found for GPIO[42]` (the GT911
+  INT) and `E lcd_panel: swap_xy is not supported by this panel` (esp_lvgl_port
+  asking the EK79007); neither stopped anything;
+- not checked by eye yet: colours, touch alignment, tearing (cookbook step 9).
+
+Wi-Fi and audio have not run from an IDF 6.x build. The board values (pins, panel timings,
 DSI lane rate, the LDO, the backlight, the GT911 settings, the I2S audio) are
 proven on the bench board by a working port on IDF 5.4.1: the pocket-tank
 firmware, `../pocket-tank`, branch `advance-p4-support`. See
@@ -139,5 +153,8 @@ likely part to need fixes.
 
 - A CrowPanel Advanced **10.1"** V1.2 (SKU DHE04310D) on **/dev/ttyUSB3**.
 - `/dev/ttyUSB0-2` are a Huawei modem, not boards.
-- That board currently runs the pocket-tank firmware. Ask before flashing
-  anything else to it.
+- That board currently runs the **AI-only demo** (2026-10-18). Its pocket-tank
+  firmware, with the tank's saved state, is backed up in
+  `/root/.cache/pocket-tank/backups/crowp4-pocket-tank-2026-10-18.bin` (restore:
+  `esptool.py -p /dev/ttyUSB3 -b 460800 write_flash 0 <that file>`). Ask before
+  flashing anything else to it.

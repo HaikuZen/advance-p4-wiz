@@ -22,6 +22,13 @@ static const char *TAG = "board";
 #define DSI_LANES      2
 #define DSI_LANE_MBPS  900    /* Elecrow's verified values (Lesson07, V1.2) */
 #define DPI_CLK_MHZ    51     /* 1414 x 645 per frame with porches: ~56 Hz */
+/* the D-PHY PLL reference: IDF 6's _DEFAULT is XTAL, which only rev >= 3.0 has;
+   a rev v1.x chip abort()s on it inside esp_lcd_new_dsi_bus. PLL_F20M for v1.x */
+#if CONFIG_ESP32P4_SELECTS_REV_LESS_V3
+#define DSI_PHY_CLK    MIPI_DSI_PHY_PLLREF_CLK_SRC_DEFAULT_LEGACY
+#else
+#define DSI_PHY_CLK    MIPI_DSI_PHY_PLLREF_CLK_SRC_DEFAULT
+#endif
 #define BL_PWM_HZ      30000
 #define BL_DUTY_BITS   LEDC_TIMER_11_BIT
 #define BL_DUTY_FLOOR  200    /* of 2047: below it the MT9201 barely lights */
@@ -81,7 +88,7 @@ static void panel_init(void) {
 
     esp_lcd_dsi_bus_handle_t bus;
     const esp_lcd_dsi_bus_config_t bc = { .bus_id = 0, .num_data_lanes = DSI_LANES,
-                                          .phy_clk_src = MIPI_DSI_PHY_PLLREF_CLK_SRC_DEFAULT,
+                                          .phy_clk_src = DSI_PHY_CLK,
                                           .lane_bit_rate_mbps = DSI_LANE_MBPS };
     ESP_ERROR_CHECK(esp_lcd_new_dsi_bus(&bc, &bus));
 
