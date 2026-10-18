@@ -9,13 +9,15 @@ Asks for whatever is not given on the command line.
   ./p4wiz.py                                    # fully interactive
   ./p4wiz.py ~/proj/my_app --wifi hosted2 --audio --ai --chip-rev v1 -y
   ./p4wiz.py ~/proj/my_app -y --idf-env tools/idf61.sh --build
+  ./p4wiz.py ~/proj/my_app -y --claude-md       # + a CLAUDE.md, for working on it with Claude Code
   ./p4wiz.py --check ~/proj/my_app              # sdkconfig vs sdkconfig.defaults, after a build
 """
-import argparse, os, re, shutil, subprocess, sys
+import argparse, datetime, os, re, shutil, string, subprocess, sys
 
 W = os.path.dirname(os.path.abspath(__file__))
 BASE = os.path.join(W, "template", "base")
 MODS = os.path.join(W, "template", "modules")
+CLAUDE = os.path.join(W, "template", "claude")   # CLAUDE.md fragments, for --claude-md
 BAUD = 460800   # 921600 corrupted a full flash read on this board's CH340
 
 REV_V1_BLOCK = """\
@@ -220,6 +222,40 @@ def assemble(dest, name, wifi, audio, ai, rev):
         f.write("build/\nmanaged_components/\nsdkconfig\nsdkconfig.old\n")
 
 
+def write_claude_md(dest, name, wifi, audio, ai, rev, idf_env, port):
+    """CLAUDE.md for the new project: template/claude/base.md plus a part per module"""
+    mods, files, parts = [], [], []
+    if wifi:
+        mods.append(f"Wi-Fi (esp_hosted {'2.12.x' if wifi == 'hosted2' else '3.x'})")
+        files.append("| `main/wifi.c/.h`, `main/wifi_ui.c`, `main/Kconfig.projbuild` | Wi-Fi through the C6: see Wi-Fi below |")
+        parts.append("wifi.md")
+    if audio:
+        mods.append("audio")
+        files.append("| `main/audio.c/.h` | the speaker: see Audio below |")
+        parts.append("audio.md")
+    if ai:
+        mods.append("the AI digit demo")
+        files.append("| `main/digit*.c/.h`, `main/digit_model.cpp`, `main/models/` | the AI demo: see AI below |")
+        files.append("| `partitions.csv` | the AI module's partition table (6 MB app) |")
+        parts.append("ai.md")
+    rev_text = ("**rev v1.x** (the bench board is v1.3): `sdkconfig.defaults` builds for it." if rev == "v1" else
+                "**rev v3.x**: `sdkconfig.defaults` keeps IDF 6.x's defaults (rev >= 3.1). "
+                "**Untested on hardware**: only rev v1.3 boards have run these files.")
+    idf = f"{os.path.abspath(idf_env)} " if idf_env else ""
+    v = dict(name=name, date=datetime.date.today().isoformat(), wizard=W,
+             modules=", ".join(mods) or "the base only (display, touch, backlight)",
+             files="".join(f + "\n" for f in files), port=port or "/dev/ttyUSBx", idf=idf,
+             idf_note=f" (here: through `{idf.strip()}`, a wrapper that runs a command in one)" if idf else
+                      " (`export.sh`, or EIM's `activate_idf_*.sh`)",
+             rev_text=rev_text, hosted="2.12.x" if wifi == "hosted2" else "3.x")
+    def part(f):
+        with open(os.path.join(CLAUDE, f)) as fh:
+            return string.Template(fh.read()).substitute(v)
+    v["sections"] = "".join(part(f) for f in parts)
+    with open(os.path.join(dest, "CLAUDE.md"), "w") as f:
+        f.write(part("base.md"))
+
+
 # --- check: every sdkconfig.defaults line must survive into sdkconfig ---
 
 def check(dest):
@@ -264,6 +300,8 @@ def main():
     ap.add_argument("--idf-env", metavar="SCRIPT", help="wrapper that runs a command in an IDF 6.x env (e.g. tools/idf61.sh)")
     ap.add_argument("--build", action=argparse.BooleanOptionalAction, help="set-target + build, then --check")
     ap.add_argument("--flash", action="store_true", help="after the build, flash and monitor on --port (replaces the firmware!)")
+    ap.add_argument("--claude-md", action=argparse.BooleanOptionalAction,
+                    help="also write a CLAUDE.md into the project: its files, build, rules and pitfalls, for Claude Code")
     ap.add_argument("-y", "--yes", action="store_true", help="take the defaults for anything not given, ask nothing")
     ap.add_argument("--check", metavar="DIR", help="only verify DIR's generated sdkconfig")
     a = ap.parse_args()
@@ -300,6 +338,9 @@ def main():
     if a.ai is None:
         a.ai = ask_yn("The AI demo (draw a digit, ESP-DL recognizes it)?", False) if asking else False
 
+    if a.claude_md is None:
+        a.claude_md = ask_yn("A CLAUDE.md for further development with Claude Code?", False) if asking else False
+
     if a.chip_rev is None:
         a.chip_rev = ask("The P4's chip revision? (IDF 6.x images for the wrong one won't boot)", [
             ("v1", "rev v1.x - the bench board is v1.3"),
@@ -331,8 +372,11 @@ def main():
     rev = detect_rev(a.port, a.idf_env) if a.chip_rev == "detect" else a.chip_rev
 
     assemble(dest, name, wifi, a.audio, a.ai, rev)
+    if a.claude_md:
+        write_claude_md(dest, name, wifi, a.audio, a.ai, rev, a.idf_env, a.port)
     print(f"\ncreated {dest}")
-    print(f"  project {name}; Wi-Fi: {wifi or 'none'}; audio: {'yes' if a.audio else 'no'}; AI: {'yes' if a.ai else 'no'}; chip rev {rev}.x")
+    print(f"  project {name}; Wi-Fi: {wifi or 'none'}; audio: {'yes' if a.audio else 'no'}; AI: {'yes' if a.ai else 'no'}; chip rev {rev}.x"
+          f"{'; CLAUDE.md' if a.claude_md else ''}")
 
     if a.build:
         r = run_idf(a.idf_env, ["idf.py", "set-target", "esp32p4", "build"], dest, capture=True)
@@ -361,7 +405,7 @@ next:
   {env}idf.py -p {a.port or '/dev/ttyUSBx'} -b {BAUD} flash monitor   # the UART socket; replaces the firmware
 then go through docs/advance-p4-cookbook.md step 9 on the board.""")
     if wifi:
-        print("Wi-Fi has never joined a network from these files: expect it to need work.")
+        print("Wi-Fi: set the network on screen (the button top left), or in idf.py menuconfig > CrowPanel Wi-Fi.")
     if a.ai:
         print("The digit model has never run on the board: try a few drawn digits (the log shows what it saw).")
     if rev == "v3":

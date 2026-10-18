@@ -48,6 +48,7 @@ Or give everything on the command line:
 | `--audio` / `--no-audio` | the speaker: plain I2S, and a beep at boot |
 | `--ai` / `--no-ai` | the handwritten-digit demo (ESP-DL). The app grows to about 2.6 MB, so the module brings its own partition table (a 6 MB app partition) |
 | `--chip-rev v1\|v3\|detect` | the P4's chip revision (see below). Default: `v1` |
+| `--claude-md` / `--no-claude-md` | also write a `CLAUDE.md` into the project, for further work on it with [Claude Code](https://claude.com/claude-code): its files, how to build and flash it, the board's rules and pitfalls, and a section per module chosen. Default: no |
 | `--port PORT` | the board's serial port, needed by `detect`, `--backup` and `--flash` |
 | `--backup FILE` | first read the board's whole 16 MB flash into FILE |
 | `--build` | also build the app, then run `--check`. Needs `idf.py` on your PATH (run the wizard from an ESP-IDF terminal, step 2) or `--idf-env` |
@@ -230,6 +231,7 @@ the part most likely to need fixes.**
 | `p4wiz.py` | the wizard |
 | `template/base/` | the base app the wizard starts from |
 | `template/modules/` | the Wi-Fi, audio and AI modules |
+| `template/claude/` | the parts of the CLAUDE.md that `--claude-md` writes: `base.md`, then one per module |
 | `docs/advance-p4-cookbook.md` | the same thing by hand, step by step, with every pitfall found so far |
 | `tools/assemble_reference.sh` | a reference assembly of base + Wi-Fi + audio, for checking the wizard |
 | `tools/train_digit_model.py` | retrains the AI demo's model (PyTorch + esp-ppq; see its docstring) |

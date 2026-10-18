@@ -15,6 +15,7 @@ plus the verified building blocks it assembles.
 | `template/modules/wifi/` | Wi-Fi through the onboard ESP32-C6 (esp_hosted): `wifi.c/h` (one Wi-Fi task: a scan, then join the network saved on screen in NVS, else the menuconfig one, and keep rejoining), `wifi_ui.c` (on-screen setup: a status button, a scan list, a password field, Forget), `Kconfig.projbuild` (the menuconfig fallback network), with config and dependency fragments for esp_hosted **2.12.x** (`*hosted2*`, recommended) or **3.x** (`*hosted3*`) |
 | `template/modules/audio/` | the speaker: plain I2S, no codec (`audio_init`, `audio_beep`) |
 | `template/modules/ai/` | AI demo: a drawing pad, and an int8 CNN that ESP-DL runs on the P4 names the digit. `models/digit.espdl` is built by `tools/train_digit_model.py` |
+| `template/claude/` | the generated project's `CLAUDE.md` (`--claude-md`): `base.md` plus `wifi.md`, `audio.md`, `ai.md` for the modules chosen, filled in with `string.Template` (`$name`, `$port`, `${idf}`, ...). Keep them true to the templates when those change |
 | `tools/train_digit_model.py` | trains the digit CNN on MNIST (augmented toward finger strokes) and exports it with esp-ppq. Needs `tools/requirements-ai.txt` in a Python 3.12 venv; see its docstring |
 | `tools/test_digit_prep.py` | compiles the board's `digit_prep.c` on the host and scores the model on MNIST digits redrawn as the pad sees them |
 | `tools/assemble_reference.sh` | reference assembly, base + Wi-Fi + audio: exactly which lines a module adds where. The wizard must reproduce this wiring |
@@ -26,6 +27,7 @@ plus the verified building blocks it assembles.
 ./p4wiz.py                                  # interactive: asks for what isn't given
 ./p4wiz.py DIR --wifi hosted2|hosted3|none --audio|--no-audio --ai|--no-ai --chip-rev v1|v3|detect -y
 ./p4wiz.py DIR -y --idf-env tools/idf61.sh --build    # + set-target, build, --check
+./p4wiz.py DIR -y --claude-md               # + a CLAUDE.md for the new project
 ./p4wiz.py --check DIR                      # every sdkconfig.defaults line in sdkconfig?
 ```
 
@@ -35,6 +37,8 @@ plus the verified building blocks it assembles.
   16 MB read) and `--flash` (flash + monitor). All three run at 460800 baud.
 - `--idf-env SCRIPT` runs IDF commands through a wrapper; `idf.py` isn't on PATH here.
 - It writes a `.gitignore`. With `--build`, the log goes to `build-wizard.log`.
+- `--claude-md` also writes a `CLAUDE.md` for the new project (off by default,
+  asked interactively): wizard-only, like the AI module.
 - `--chip-rev v3` swaps the rev-v1 block of `sdkconfig.defaults` for IDF's
   defaults. **Untested on hardware.**
 - It refuses paths with `[` / `]`, existing directories and invalid project names.
