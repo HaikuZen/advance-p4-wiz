@@ -104,7 +104,9 @@ on the bench 10.1":
 - two log lines left to look at: `W gpio: conflict found for GPIO[42]` (the GT911
   INT) and `E lcd_panel: swap_xy is not supported by this panel` (esp_lvgl_port
   asking the EK79007); neither stopped anything;
-- not checked by eye yet: colours, touch alignment, tearing (cookbook step 9).
+- checked by eye: colours right (RGB bars in order), touch lands under the
+  finger, drawn digits recognized. Not reported yet: tearing while dragging the
+  slider, and the backlight dimming (cookbook step 9).
 
 Wi-Fi and audio have not run from an IDF 6.x build. The board values (pins, panel timings,
 DSI lane rate, the LDO, the backlight, the GT911 settings, the I2S audio) are

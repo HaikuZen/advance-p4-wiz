@@ -18,7 +18,8 @@ Optional sections add **Wi-Fi** through the onboard ESP32-C6, the
   options and the audio snippet, compiles with no warnings.
 - **Flashed once** from a 6.x build (2026-10-18, base + the AI module): it boots,
   the panel, touch and AI demo run. That first boot found the DSI clock bug in
-  step 13's table. Colours, touch alignment and tearing not yet checked by eye.
+  step 13's table. Colours and touch alignment checked right by eye; tearing
+  and backlight dimming not yet reported.
 - **Where the board values come from:** this repository's working port of the
   same board (`firmware/main/display_port_dsi.c`, `docs/board-crowpanel-p4.md`).
   That port runs on the bench 10.1" on IDF 5.4.1. The pins, panel timings, DSI
