@@ -9,6 +9,7 @@ plus the verified building blocks it assembles.
 | path | what |
 |---|---|
 | `p4wiz.py` | the wizard (Python 3, stdlib only). See below |
+| `README.md` | for users of the public repo: running the wizard, building and flashing an app, what's tested. Keep its status table in step with the verification status below |
 | `docs/advance-p4-cookbook.md` | the full manual recipe, step by step, with every pitfall. **Read it first**: the wizard automates it |
 | `template/base/` | a complete app: 1024x600 MIPI-DSI panel, GT911 touch, LVGL 9 without tearing, PWM backlight, and a demo screen (RGB bars, a touch dot, a brightness slider). Builds as is |
 | `template/modules/wifi/` | Wi-Fi through the onboard ESP32-C6 (esp_hosted): `wifi.c/h` (init + one scan), with config and dependency fragments for esp_hosted **2.12.x** (`*hosted2*`, recommended) or **3.x** (`*hosted3*`) |
