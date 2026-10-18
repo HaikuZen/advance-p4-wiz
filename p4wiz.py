@@ -3,10 +3,11 @@
 (ESP32-P4, hardware V1.2), from template/base plus the optional Wi-Fi and audio modules.
 
 It applies exactly the wiring of tools/assemble_reference.sh (see CLAUDE.md and
-docs/advance-p4-cookbook.md). Asks for whatever is not given on the command line.
+docs/advance-p4-cookbook.md), plus the AI module (handwritten digits, ESP-DL).
+Asks for whatever is not given on the command line.
 
   ./p4wiz.py                                    # fully interactive
-  ./p4wiz.py ~/proj/my_app --wifi hosted2 --audio --chip-rev v1 -y
+  ./p4wiz.py ~/proj/my_app --wifi hosted2 --audio --ai --chip-rev v1 -y
   ./p4wiz.py ~/proj/my_app -y --idf-env tools/idf61.sh --build
   ./p4wiz.py --check ~/proj/my_app              # sdkconfig vs sdkconfig.defaults, after a build
 """
@@ -29,6 +30,7 @@ REV_V3_BLOCK = """\
 # NOT VERIFIED on hardware: only rev v1.3 boards have been tested.
 """
 APP_END = "        lvgl_port_unlock();\n    }\n}"
+AI_FILES = ("digit.c", "digit.h", "digit_prep.c", "digit_prep.h", "digit_model.cpp")
 
 
 def die(msg):
@@ -123,10 +125,10 @@ def replace_once(s, old, new, what):
     return s.replace(old, new, 1)
 
 
-def assemble(dest, name, wifi, audio, rev):
+def assemble(dest, name, wifi, audio, ai, rev):
     shutil.copytree(BASE, dest)
     main = os.path.join(dest, "main")
-    srcs, reqs, includes, calls = [], [], [], []
+    srcs, reqs, includes, calls, ui = [], [], [], [], []
 
     if wifi:
         n = wifi[-1]   # "hosted2" -> "2"
@@ -152,6 +154,25 @@ def assemble(dest, name, wifi, audio, rev):
         includes.append('#include "audio.h"')
         calls += ["    audio_init();", "    audio_beep(880, 150);"]
 
+    if ai:
+        for f in AI_FILES:
+            shutil.copy(os.path.join(MODS, "ai", f), main)
+        os.makedirs(os.path.join(main, "models"))
+        shutil.copy(os.path.join(MODS, "ai", "models", "digit.espdl"), os.path.join(main, "models"))
+        with open(os.path.join(MODS, "ai", "idf_component.ai.yml")) as f:
+            dep = "".join(l for l in f if not l.startswith("#"))
+        with open(os.path.join(main, "idf_component.yml"), "a") as f:
+            f.write(dep)
+        shutil.copy(os.path.join(MODS, "ai", "partitions.csv"), dest)
+        with open(os.path.join(MODS, "ai", "sdkconfig.ai")) as f:
+            frag = f.read()
+        edit(os.path.join(dest, "sdkconfig.defaults"), lambda s: replace_once(
+            s, "CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y\n", frag, "partition table"))
+        srcs += ['"digit.c"', '"digit_prep.c"', '"digit_model.cpp"']
+        reqs += ["esp-dl", "esp_timer"]
+        includes.append('#include "digit.h"')
+        ui.append("        digit_ui_create(lv_screen_active());")
+
     if wifi:
         calls.append("    wifi_scan_once();")   # last: the scan blocks
 
@@ -161,7 +182,15 @@ def assemble(dest, name, wifi, audio, rev):
             "esp_hw_support)", "esp_hw_support " + " ".join(reqs) + ")", "REQUIRES"))
         edit(os.path.join(main, "main.c"), lambda s: replace_once(
             replace_once(s, '#include "esp_log.h"', '#include "esp_log.h"\n' + "\n".join(includes), "include"),
-            APP_END, "        lvgl_port_unlock();\n    }\n" + "\n".join(calls) + "\n}", "app_main end"))
+            APP_END, "        lvgl_port_unlock();\n    }\n" + "".join(c + "\n" for c in calls) + "}", "app_main end"))
+    if ui:
+        edit(os.path.join(main, "main.c"), lambda s: replace_once(
+            s, "        build_ui();\n", "        build_ui();\n" + "".join(u + "\n" for u in ui), "build_ui()"))
+    if ai:   # after idf_component_register: it needs ${COMPONENT_LIB}
+        with open(os.path.join(MODS, "ai", "CMakeLists.ai.cmake")) as f:
+            frag = f.read()
+        with open(os.path.join(main, "CMakeLists.txt"), "a") as f:
+            f.write(frag)
 
     if rev == "v3":
         edit(os.path.join(dest, "sdkconfig.defaults"), lambda s: replace_once(s, REV_V1_BLOCK, REV_V3_BLOCK, "chip revision"))
@@ -207,6 +236,8 @@ def main():
     ap.add_argument("--wifi", choices=["none", "hosted2", "hosted3"],
                     help="Wi-Fi via the C6: esp_hosted 2.12.x (matches Elecrow's C6, recommended) or 3.x")
     ap.add_argument("--audio", action=argparse.BooleanOptionalAction, help="the speaker (plain I2S)")
+    ap.add_argument("--ai", action=argparse.BooleanOptionalAction,
+                    help="the AI demo: draw a digit, an int8 CNN on the P4 (ESP-DL) names it")
     ap.add_argument("--chip-rev", choices=["v1", "v3", "detect"],
                     help="the P4's revision: v1 (bench board: v1.3), v3, or detect with esptool")
     ap.add_argument("--port", help="the board's UART socket, for detect / backup / flash (e.g. /dev/ttyUSB3)")
@@ -247,6 +278,9 @@ def main():
     if a.audio is None:
         a.audio = ask_yn("The speaker (plain I2S, a beep at boot)?", True) if asking else False
 
+    if a.ai is None:
+        a.ai = ask_yn("The AI demo (draw a digit, ESP-DL recognizes it)?", False) if asking else False
+
     if a.chip_rev is None:
         a.chip_rev = ask("The P4's chip revision? (IDF 6.x images for the wrong one won't boot)", [
             ("v1", "rev v1.x - the bench board is v1.3"),
@@ -271,9 +305,9 @@ def main():
         backup(a.port, a.idf_env, a.backup)
     rev = detect_rev(a.port, a.idf_env) if a.chip_rev == "detect" else a.chip_rev
 
-    assemble(dest, name, wifi, a.audio, rev)
+    assemble(dest, name, wifi, a.audio, a.ai, rev)
     print(f"\ncreated {dest}")
-    print(f"  project {name}; Wi-Fi: {wifi or 'none'}; audio: {'yes' if a.audio else 'no'}; chip rev {rev}.x")
+    print(f"  project {name}; Wi-Fi: {wifi or 'none'}; audio: {'yes' if a.audio else 'no'}; AI: {'yes' if a.ai else 'no'}; chip rev {rev}.x")
 
     if a.build:
         r = run_idf(a.idf_env, ["idf.py", "set-target", "esp32p4", "build"], dest, capture=True)
@@ -303,6 +337,8 @@ next:
 then go through docs/advance-p4-cookbook.md step 9 on the board.""")
     if wifi:
         print("Wi-Fi has never joined a network from these files: expect it to need work.")
+    if a.ai:
+        print("The digit model has never run on the board: try a few drawn digits (the log shows what it saw).")
     if rev == "v3":
         print("Chip rev v3.x: the sdkconfig for it is untested on hardware.")
 

@@ -10,8 +10,8 @@ for the Elecrow **CrowPanel Advanced 7" / 10.1"** (ESP32-P4, hardware
 - a PWM backlight with brightness control;
 - a demo screen that checks colours and touch.
 
-Optional sections add **Wi-Fi** through the onboard ESP32-C6 and the
-**speaker**.
+Optional sections add **Wi-Fi** through the onboard ESP32-C6, the
+**speaker**, and an **AI** demo (handwritten digits with ESP-DL).
 
 **Status (2026-10-18):**
 - **Built on ESP-IDF v6.1:** every file in this cookbook, including both Wi-Fi
@@ -737,7 +737,63 @@ Call `audio_init(); audio_beep(880, 150);` after `board_init()`. Keep the amps
 off (GPIO 30 high) whenever nothing is playing. They are on whenever the pin
 is low, and an idle I2S line can hiss.
 
-## 12. Pitfalls, in one place
+## 12. Optional: AI, handwritten digits with ESP-DL
+
+The P4 has no separate NPU. Its "AI" is the PIE vector instructions, which
+Espressif's **ESP-DL** uses to run int8 models. ESP-DL ships no digit model, so
+this repository trains one: `tools/train_digit_model.py` trains a small CNN
+(3 conv + 1 dense, ~27k parameters) on MNIST and exports it with **esp-ppq**
+as `template/modules/ai/models/digit.espdl` (24 KB). Measured on the host:
+99.0% on the MNIST test set in float, 98.35% after int8 quantization.
+
+**The finger is not a pen.** MNIST is pen on paper; the pad gets fat finger
+strokes. Two things close the gap:
+- the training data is augmented: strokes dilated, small rotations, scales and
+  shears;
+- the board feeds the model what MNIST did to its scans (`digit_prep.c`): the
+  ink cropped, scaled so its longer side is 20 px, centred by mass in 28x28.
+
+`tools/test_digit_prep.py` compiles `digit_prep.c` on the host and checks it:
+MNIST test digits redrawn on a 240x240 pad (random size and place, strokes
+about a finger wide) score 98.7% through it. Real finger drawings on the board
+are untested.
+
+The files (`template/modules/ai/`):
+- `digit_model.cpp`: loads the model from the app's rodata, quantizes the
+  28x28 input with the input tensor's exponent, runs it, softmax on the logits;
+- `digit.c`: a 240x240 LVGL canvas on the right of the demo screen. A 700 ms
+  pause ends the digit (so 4, 5 and 7 can take two strokes); the next touch
+  clears it. It logs the digit, its probability, the inference time, and the
+  28x28 input as ASCII art (`LOG_INPUT`), which is what to look at when it
+  guesses wrong.
+
+Wiring:
+- `espressif/esp-dl: "^3.3.13"` under `dependencies:`;
+- SRCS `"digit.c" "digit_prep.c" "digit_model.cpp"`, REQUIRES `esp-dl esp_timer`;
+- **the model must be 16-byte aligned.** Embed it with ESP-DL's helper, after
+  `idf_component_register` (`CMakeLists.ai.cmake`), not with `EMBED_FILES`:
+  ```cmake
+  idf_component_get_property(espdl_dir espressif__esp-dl COMPONENT_DIR)
+  set(cmake_dir ${espdl_dir}/fbs_loader/cmake)
+  include(${cmake_dir}/utilities.cmake)
+  target_add_aligned_binary_data(${COMPONENT_LIB} models/digit.espdl BINARY)
+  ```
+- **a bigger app partition.** ESP-DL takes the app to ~2.5 MB, over
+  `PARTITION_TABLE_SINGLE_APP_LARGE`'s 1.5 MB. The module's `partitions.csv`
+  gives the factory app 6 MB; in `sdkconfig.defaults` it replaces the
+  `SINGLE_APP_LARGE` line with `CONFIG_PARTITION_TABLE_CUSTOM=y` and
+  `CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"`;
+- `digit_ui_create(lv_screen_active())` right after `build_ui()`, holding the
+  LVGL lock.
+
+**Check:** the boot log shows `model loaded`. Draw each digit a few times: the
+log gives what the model saw and its answer.
+
+To retrain (e.g. with your own drawings added): see the docstring of
+`tools/train_digit_model.py` for the Python 3.12 venv, then run it and
+`tools/test_digit_prep.py`.
+
+## 13. Pitfalls, in one place
 
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -756,6 +812,8 @@ is low, and an idle I2S line can hiss.
 | GPIO 0 / 1 do strange things | they are the 32 kHz crystal | don't use them; BOOT is GPIO 35 |
 | corrupted flash read-back | the CH340 drops bytes at 921600 | 460800 baud |
 | LVGL registered with no sources | project path contains `[` or `]` | move the project |
+| "app partition is too small" with ESP-DL | ESP-DL takes the app to ~2.5 MB | a custom partition table (step 12) |
+| the digit model is sure of the wrong digit | the input doesn't look like MNIST | read the ASCII input in the log; adjust `BRUSH_R` or `digit_prep.c`, or retrain with your drawings |
 
 ## Where this came from
 

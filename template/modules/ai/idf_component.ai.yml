@@ -1,0 +1,2 @@
+# append under `dependencies:` in main/idf_component.yml - ESP-DL (3.3.13 built on IDF 6.1)
+  espressif/esp-dl: "^3.3.13"

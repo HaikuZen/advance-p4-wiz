@@ -1,0 +1,4 @@
+# tools/train_digit_model.py (CPU wheels: see its docstring). Built with torch 2.x, esp-ppq 1.x
+torch
+torchvision
+esp-ppq
