@@ -301,6 +301,11 @@ def main():
     if a.build is None:
         a.build = ask_yn("Build it now?", True) if asking else False
 
+    # before touching the board or the disk: a build needs an IDF environment
+    if a.build and not a.idf_env and not shutil.which("idf.py"):
+        die("idf.py not found: run the wizard from an ESP-IDF 6.x terminal (. $IDF_PATH/export.sh), "
+            "pass --idf-env SCRIPT (a wrapper that runs a command in one), or drop --build / --flash")
+
     if a.backup:
         backup(a.port, a.idf_env, a.backup)
     rev = detect_rev(a.port, a.idf_env) if a.chip_rev == "detect" else a.chip_rev

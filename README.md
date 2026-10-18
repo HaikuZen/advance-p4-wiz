@@ -50,7 +50,7 @@ Or give everything on the command line:
 | `--chip-rev v1\|v3\|detect` | the P4's chip revision (see below). Default: `v1` |
 | `--port PORT` | the board's serial port, needed by `detect`, `--backup` and `--flash` |
 | `--backup FILE` | first read the board's whole 16 MB flash into FILE |
-| `--build` | also build the app, then run `--check` |
+| `--build` | also build the app, then run `--check`. Needs `idf.py` on your PATH (run the wizard from an ESP-IDF terminal, step 2) or `--idf-env` |
 | `--flash` | also build, flash and open the monitor |
 | `--idf-env SCRIPT` | run the IDF commands through a wrapper script, if `idf.py` isn't on your PATH |
 | `-y` | ask nothing: anything not given takes its default (no Wi-Fi, no audio, no AI, rev v1) |
