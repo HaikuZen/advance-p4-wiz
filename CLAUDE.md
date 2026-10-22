@@ -28,23 +28,23 @@ plus the verified building blocks it assembles.
 ./p4wiz.py                                  # interactive: asks for what isn't given
 ./p4wiz.py DIR --wifi hosted2|hosted3|none --audio|--no-audio --ai|--no-ai --chip-rev v1|v3|detect -y
 ./p4wiz.py DIR -y --idf-env tools/idf61.sh --build    # + set-target, build, --check
-./p4wiz.py DIR -y --claude-md               # + a CLAUDE.md for the new project
+./p4wiz.py DIR -y --no-claude-md            # without the new project's CLAUDE.md
 ./p4wiz.py --check DIR                      # every sdkconfig.defaults line in sdkconfig?
 ```
 
-- `-y`, or no terminal: defaults for anything not given (no Wi-Fi, no audio, no AI, rev v1).
+- `-y`, or no terminal: defaults for anything not given (no Wi-Fi, no audio, no AI, rev v1, a CLAUDE.md).
 - `--name` sets the CMake project name (default: the directory name).
 - `--port` is the board's UART socket, needed by `detect`, `--backup FILE` (a full
   16 MB read) and `--flash` (flash + monitor). All three run at 460800 baud.
 - `--idf-env SCRIPT` runs IDF commands through a wrapper; `idf.py` isn't on PATH here.
 - It writes a `.gitignore`. With `--build`, the log goes to `build-wizard.log`.
-- `--claude-md` also writes a `CLAUDE.md` for the new project (off by default,
-  asked interactively): wizard-only, like the AI module.
+- It writes a `CLAUDE.md` for the new project by default (`--no-claude-md` to
+  skip it; asked interactively, default yes): wizard-only, like the AI module.
 - `--chip-rev v3` swaps the rev-v1 block of `sdkconfig.defaults` for IDF's
   defaults. **Untested on hardware.**
 - It refuses paths with `[` / `]`, existing directories and invalid project names.
 - The edits fail loudly if a template anchor moves. With Wi-Fi + audio, its
-  output is byte-identical to `tools/assemble_reference.sh` (apart from `.gitignore`).
+  output is byte-identical to `tools/assemble_reference.sh` (apart from `.gitignore` and `CLAUDE.md`).
   Keep the two in sync when changing the templates. The AI module is wizard-only:
   the reference script doesn't add it.
 

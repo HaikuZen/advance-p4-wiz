@@ -9,7 +9,7 @@ Asks for whatever is not given on the command line.
   ./p4wiz.py                                    # fully interactive
   ./p4wiz.py ~/proj/my_app --wifi hosted2 --audio --ai --chip-rev v1 -y
   ./p4wiz.py ~/proj/my_app -y --idf-env tools/idf61.sh --build
-  ./p4wiz.py ~/proj/my_app -y --claude-md       # + a CLAUDE.md, for working on it with Claude Code
+  ./p4wiz.py ~/proj/my_app -y --no-claude-md    # without the project's CLAUDE.md (written by default)
   ./p4wiz.py --check ~/proj/my_app              # sdkconfig vs sdkconfig.defaults, after a build
 """
 import argparse, datetime, os, re, shutil, string, subprocess, sys
@@ -301,7 +301,7 @@ def main():
     ap.add_argument("--build", action=argparse.BooleanOptionalAction, help="set-target + build, then --check")
     ap.add_argument("--flash", action="store_true", help="after the build, flash and monitor on --port (replaces the firmware!)")
     ap.add_argument("--claude-md", action=argparse.BooleanOptionalAction,
-                    help="also write a CLAUDE.md into the project: its files, build, rules and pitfalls, for Claude Code")
+                    help="write a CLAUDE.md into the project (the default): its files, build, rules and pitfalls, for Claude Code")
     ap.add_argument("-y", "--yes", action="store_true", help="take the defaults for anything not given, ask nothing")
     ap.add_argument("--check", metavar="DIR", help="only verify DIR's generated sdkconfig")
     a = ap.parse_args()
@@ -339,7 +339,7 @@ def main():
         a.ai = ask_yn("The AI demo (draw a digit, ESP-DL recognizes it)?", False) if asking else False
 
     if a.claude_md is None:
-        a.claude_md = ask_yn("A CLAUDE.md for further development with Claude Code?", False) if asking else False
+        a.claude_md = ask_yn("A CLAUDE.md for further development with Claude Code?", True) if asking else True
 
     if a.chip_rev is None:
         a.chip_rev = ask("The P4's chip revision? (IDF 6.x images for the wrong one won't boot)", [

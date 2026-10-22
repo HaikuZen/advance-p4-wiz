@@ -48,13 +48,13 @@ Or give everything on the command line:
 | `--audio` / `--no-audio` | the speaker: plain I2S, and a beep at boot |
 | `--ai` / `--no-ai` | the handwritten-digit demo (ESP-DL). The app grows to about 2.6 MB, so the module brings its own partition table (a 6 MB app partition) |
 | `--chip-rev v1\|v3\|detect` | the P4's chip revision (see below). Default: `v1` |
-| `--claude-md` / `--no-claude-md` | also write a `CLAUDE.md` into the project, for further work on it with [Claude Code](https://claude.com/claude-code): its files, how to build and flash it, the board's rules and pitfalls, and a section per module chosen. Default: no |
+| `--claude-md` / `--no-claude-md` | also write a `CLAUDE.md` into the project, for further work on it with [Claude Code](https://claude.com/claude-code): its files, how to build and flash it, the board's rules and pitfalls, and a section per module chosen. Default: yes |
 | `--port PORT` | the board's serial port, needed by `detect`, `--backup` and `--flash` |
 | `--backup FILE` | first read the board's whole 16 MB flash into FILE |
 | `--build` | also build the app, then run `--check`. Needs `idf.py` on your PATH (run the wizard from an ESP-IDF terminal, step 2) or `--idf-env` |
 | `--flash` | also build, flash and open the monitor |
 | `--idf-env SCRIPT` | run the IDF commands through a wrapper script, if `idf.py` isn't on your PATH |
-| `-y` | ask nothing: anything not given takes its default (no Wi-Fi, no audio, no AI, rev v1) |
+| `-y` | ask nothing: anything not given takes its default (no Wi-Fi, no audio, no AI, rev v1, a CLAUDE.md) |
 | `--check DIR` | check a built project (see step 3) |
 
 ### The chip revision matters
