@@ -11,6 +11,7 @@ plus the verified building blocks it assembles.
 | `p4wiz.py` | the wizard (Python 3, stdlib only). See below |
 | `README.md` | for users of the public repo: running the wizard, building and flashing an app, what's tested. Keep its status table in step with the verification status below |
 | `docs/advance-p4-cookbook.md` | the full manual recipe, step by step, with every pitfall. **Read it first**: the wizard automates it |
+| `docs/guide_for_agent_advance-p4.md` | ArtShow's guide for agents (2026-10): what a full app on this board taught. Merged into the cookbook as step 14; keep the two in step |
 | `template/base/` | a complete app: 1024x600 MIPI-DSI panel, GT911 touch, LVGL 9 without tearing, PWM backlight, and a demo screen (RGB bars, a touch dot, a brightness slider). Builds as is |
 | `template/modules/wifi/` | Wi-Fi through the onboard ESP32-C6 (esp_hosted): `wifi.c/h` (one Wi-Fi task: a scan, then join the network saved on screen in NVS, else the menuconfig one, and keep rejoining), `wifi_ui.c` (on-screen setup: a status button, a scan list, a password field, Forget), `Kconfig.projbuild` (the menuconfig fallback network), with config and dependency fragments for esp_hosted **2.12.x** (`*hosted2*`, recommended) or **3.x** (`*hosted3*`) |
 | `template/modules/audio/` | the speaker: plain I2S, no codec (`audio_init`, `audio_beep`) |

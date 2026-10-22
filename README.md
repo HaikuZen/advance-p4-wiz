@@ -232,7 +232,8 @@ the part most likely to need fixes.**
 | `template/base/` | the base app the wizard starts from |
 | `template/modules/` | the Wi-Fi, audio and AI modules |
 | `template/claude/` | the parts of the CLAUDE.md that `--claude-md` writes: `base.md`, then one per module |
-| `docs/advance-p4-cookbook.md` | the same thing by hand, step by step, with every pitfall found so far |
+| `docs/advance-p4-cookbook.md` | the same thing by hand, step by step, with every pitfall found so far. Step 14: growing the skeleton into a real app (memory, tasks, LVGL, HTTPS, microSD, JPEG, testing) |
+| `docs/guide_for_agent_advance-p4.md` | the same lessons as one guide for coding agents, from building ArtShow |
 | `tools/assemble_reference.sh` | a reference assembly of base + Wi-Fi + audio, for checking the wizard |
 | `tools/train_digit_model.py` | retrains the AI demo's model (PyTorch + esp-ppq; see its docstring) |
 | `tools/test_digit_prep.py` | tests the AI demo's image preprocessing on a PC |

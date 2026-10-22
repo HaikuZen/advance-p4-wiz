@@ -5,7 +5,9 @@ hardware V1.2), scaffolded by p4wiz on $date with: $modules.
 
 The wizard and its full recipe live in the advance-p4-wiz repo
 (https://github.com/HaikuZen/advance-p4-wiz; here: `$wizard`). Its
-`docs/advance-p4-cookbook.md` explains every board value and pitfall below.
+`docs/advance-p4-cookbook.md` explains every board value and pitfall below. Before
+growing this app (memory, tasks, HTTPS, the microSD card, JPEG, testing), read
+its **step 14**, lessons from a full app on this board.
 
 ## Files
 

@@ -11,7 +11,9 @@ for the Elecrow **CrowPanel Advanced 7" / 10.1"** (ESP32-P4, hardware
 - a demo screen that checks colours and touch.
 
 Optional sections add **Wi-Fi** through the onboard ESP32-C6, the
-**speaker**, and an **AI** demo (handwritten digits with ESP-DL).
+**speaker**, and an **AI** demo (handwritten digits with ESP-DL). Step 14
+covers growing the skeleton into a real app: memory, tasks, LVGL, HTTPS, the
+microSD card, JPEG, testing. It comes from building ArtShow on this board.
 
 **Status (2026-10-18):**
 - **Built on ESP-IDF v6.1:** every file in this cookbook, including both Wi-Fi
@@ -59,11 +61,14 @@ Optional sections add **Wi-Fi** through the onboard ESP32-C6, the
 | chip | ESP32-P4 rev v1.x, 360 MHz max, 32 MB hex PSRAM at 200 MHz, 16 MB flash |
 | panel | 1024 x 600 IPS, EK79007, MIPI-DSI 2 lanes x 900 Mbps, DPI 51 MHz (~56 Hz) |
 | D-PHY supply | the P4's internal LDO3 at 2.5 V (Elecrow's code also takes LDO4 at 3.3 V) |
-| backlight | GPIO 31 into an MT9201, LEDC PWM 30 kHz, 11-bit, lit from duty ~200 / 2047 |
+| backlight | GPIO 31 into an MT9201, LEDC PWM 30 kHz, 11-bit, lit from duty ~200 / 2047; flickers below ~25 % (step 14.4) |
 | touch | GT911 at 0x5d: SDA 45, SCL 46, INT 42, RST 40 |
 | other I2C | 0x2f: an STC8 battery helper. **No ES8311**, despite the schematic (see step 11) |
 | audio | plain I2S, no codec: BCLK 22, WS 21, DOUT 23, no MCLK; amps enable GPIO 30 **active low** |
 | Wi-Fi | ESP32-C6 over 4-bit SDIO: CLK 18, CMD 19, D0..D3 17 / 16 / 15 / 14, C6 enable GPIO 32 |
+| microSD | SDMMC **slot 0**, 1-bit: CLK 43, CMD 44, D0 39; IO from LDO4 at 3.3 V. Shares the SDMMC host with the C6 (step 14.6) |
+| USB | J16 is the P4's high-speed USB OTG. **VBUS is an input only** (diodes): no 5 V out, so a device must be self-powered or on a powered hub |
+| memory | ~500 KB internal RAM, the scarce one (step 14.2); 32 MB PSRAM |
 | keys | BOOT is **GPIO 35** (GPIO 0 / 1 are the 32 kHz crystal); RESET |
 | panel reset | GPIO 41 is wired, but leave it alone (Elecrow's driver does) |
 
@@ -141,7 +146,10 @@ Notes:
   `CONFIG_IDF_EXPERIMENTAL_FEATURES`, with 20 MHz otherwise. The panel streams
   ~69 MB/s out of PSRAM (1024 x 600 x 2 bytes, 56 times a second), so a slow
   PSRAM shows on the screen.
-- LVGL only compiles in the fonts enabled here.
+- LVGL only compiles in the fonts enabled here. The built-in Montserrat fonts
+  are ASCII only (step 14.4).
+- A bigger app needs more lines (TLS buffers in PSRAM, the PPA, FAT names, a
+  bigger partition): step 14.1.
 - After editing this file, delete the generated `sdkconfig` and rebuild. Don't
   hand-edit the generated file.
 
@@ -508,6 +516,10 @@ Use the board's **UART** socket. Flashing **replaces Elecrow's factory
 firmware**; restore it from the step 0 backup if needed. The app, partition
 table and bootloader all change. Exit the monitor with `Ctrl+]`.
 
+**Check that the build succeeded before flashing**: after a failed build,
+`flash` writes the previous binary, and the test runs on old code. The same
+goes for scripts that chain `build flash` (step 14.10).
+
 ## 9. Verify on the board
 
 1. **Boot log:**
@@ -528,7 +540,12 @@ table and bootloader all change. Exit the monitor with `Ctrl+]`.
    finger. If an axis is mirrored or swapped, change `mirror_x` / `mirror_y` /
    `swap_xy` in `touch_init`.
 5. **Backlight:** the slider dims the panel smoothly, and it stays lit at the
-   low end.
+   low end. ArtShow saw flicker below ~25 % (step 14.4): look for it on a
+   white screen.
+6. **Harmless lines** in the log: `W gpio: conflict found for GPIO[42]` (the
+   GT911 INT pin; touch works) and `E lcd_panel: swap_xy is not supported by
+   this panel` (esp_lvgl_port asks the EK79007). With Wi-Fi, also
+   `CONFIG_FREERTOS_HZ is 100, ESP-Hosted recommended 1000`: Wi-Fi works at 100.
 
 ## 10. Optional: Wi-Fi through the ESP32-C6
 
@@ -1131,7 +1148,291 @@ To retrain (e.g. with your own drawings added): see the docstring of
 | corrupted flash read-back | the CH340 drops bytes at 921600 | 460800 baud |
 | LVGL registered with no sources | project path contains `[` or `]` | move the project |
 | "app partition is too small" with ESP-DL | ESP-DL takes the app to ~2.5 MB | a custom partition table (step 12) |
+| screen flickers at low brightness, worse on white | the MT9201 at under ~25 % duty, at any PWM frequency | 25 % floor for a brightness control, 0 for off (14.4) |
+| TLS fails with `-0x008D`, `allocate_dma_buf: not enough mem`, pages half-draw | internal RAM ran out (PSRAM had plenty) | big buffers, cJSON, SQLite and worker stacks in PSRAM; measure (14.2) |
+| `task_wdt: ... IDLE1 (CPU 1)`, over and over | a task computes for seconds (TLS handshake, JPEG, painting) above idle priority | `tskIDLE_PRIORITY`, or yield often (14.3) |
+| "Stack protection fault" opening a page | a heavy page opened from `app_main`'s small stack | open it from the LVGL task (an `lv_timer`) (14.3) |
+| reboot loop after mounting the microSD card | `SDMMC_HOST_DEFAULT()` picks slot 1 on the P4; the failed mount's cleanup removes esp_hosted's slot | `host.slot = SDMMC_HOST_SLOT_0`; never deinit the host (14.6) |
+| "Unrecoverable host sdio state", 0x107, restart | the card was mounted while the C6 link was up or coming up | mount once, before `wifi_start()` (14.6) |
+| card and Wi-Fi both dead after a reset | the card was left mid-read and holds D0 low | clock the card by hand and send CMD0 before mounting (14.6) |
+| SQLite "disk I/O error" after a reset | `synchronous = NORMAL` on FAT | `PRAGMA synchronous = FULL`, one connection, no WAL (14.6) |
+| the clock is set ~30 s late | SNTP's first tries ran before there was an IP | restart SNTP on each `IP_EVENT_STA_GOT_IP` (14.5) |
+| a JPEG won't decode | progressive JPEG: both decoders are baseline only | skip it and say why (14.7) |
+| accented letters show as boxes | the built-in Montserrat fonts are ASCII only | convert fonts with Latin-1 + Latin Extended-A (14.4) |
+| a `DOTS` label wraps over the line below | `LV_LABEL_LONG_MODE_DOTS` needs a fixed height | give the label a height (14.4) |
 | the digit model is sure of the wrong digit | the input doesn't look like MNIST | read the ASCII input in the log; adjust `BRUSH_R` or `digit_prep.c`, or retrain with your drawings |
+
+## 14. Growing it into a real app: lessons from ArtShow
+
+Steps 1-13 make a skeleton. This step is what it took to grow one into a
+real app: **ArtShow**, made with the wizard (Wi-Fi 2.12.x + audio). It is a
+slideshow with eleven pages, HTTPS APIs, SQLite on the microSD card and audio,
+built on ESP-IDF 6.1, LVGL 9.6 and esp_hosted 2.12.x on the bench 10.1". Each
+rule comes with the symptom that taught it. The rules were measured while
+building ArtShow, not re-checked against the files in this repository.
+
+### 14.1 More `sdkconfig.defaults` and components
+
+Lines a bigger app adds to step 3 (one line each; delete `sdkconfig` and
+rebuild after adding them):
+
+```
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y          # TLS buffers (~40 KB a connection) in PSRAM
+# CONFIG_MBEDTLS_HARDWARE_ECDSA_VERIFY is not set   # rev v1.x has no ECDSA peripheral
+CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y  # task stacks in PSRAM (14.2)
+
+CONFIG_LV_USE_CLIB_MALLOC=y                  # LVGL on the system heap, not a fixed 64 KB pool
+CONFIG_LV_USE_PPA=y                          # the P4's 2D engine draws fills and images
+CONFIG_LV_USE_PPA_IMG=y
+CONFIG_LV_DRAW_BUF_ALIGN=64                  # the PPA wants cache-line (64 B) alignment
+
+CONFIG_FATFS_LFN_HEAP=y                      # FAT on the card: long, accented names
+CONFIG_FATFS_API_ENCODING_UTF_8=y
+
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+```
+
+LVGL, fonts, TLS and SQLite reach ~3 MB quickly, more than
+`SINGLE_APP_LARGE` holds. A 4 MB app partition (the AI module of step 12 uses
+6 MB):
+
+```
+nvs,      data, nvs,     0x9000,   0x6000,
+phy_init, data, phy,     0xf000,   0x1000,
+factory,  app,  factory, 0x10000,  0x400000,
+```
+
+Components ArtShow added to `main/idf_component.yml`:
+
+```yaml
+  espressif/esp_new_jpeg: "^1.0.2"   # software JPEG: decodes and encodes, can shrink
+  espressif/cjson: "^1.7.19"         # IDF 6 has no json component
+```
+
+### 14.2 Memory: internal RAM is what runs out
+
+The P4 has ~500 KB of internal RAM and 32 MB of PSRAM. What ran out, every
+time, was **internal RAM**, while PSRAM had 15 MB free.
+
+Internal RAM goes to:
+- task stacks (by default), LVGL objects and its draw buffers in flight,
+  lwIP and esp_hosted buffers, FreeRTOS objects;
+- each open file on the card: a ~4 KB cache (`CONFIG_FATFS_PER_FILE_CACHE`);
+- DMA bounce buffers: the SD driver allocates one (internal) for a read into
+  memory it can't DMA into;
+- TLS handshakes, even with `CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC`;
+- LVGL on the system heap: drawing a busy page takes ~125 KB for a moment.
+
+Running out is **not** a clean error where you allocate:
+- TLS fails with `-0x008D` (PSA_ERROR_INSUFFICIENT_MEMORY) in
+  `mbedtls_ssl_setup` or the handshake;
+- `sdmmc_cmd: allocate_dma_buf: not enough mem`, and a failed card read;
+- LVGL pages that half-draw.
+
+Rules:
+- **Big buffers in PSRAM**, explicitly: `heap_caps_malloc(..., MALLOC_CAP_SPIRAM)`
+  for images, canvases, text, JSON, tables and caches. Point cJSON at PSRAM
+  with `cJSON_InitHooks`: a 70 KB JSON answer is ~3000 nodes, ~200 KB of
+  internal RAM otherwise. SQLite too (`SQLITE_CONFIG_MALLOC`).
+- Static arrays (`static uint16_t big[...]`) land in internal RAM: allocate
+  them in PSRAM at start instead.
+- **Worker task stacks in PSRAM**: `xTaskCreateWithCaps(fn, name, stack, arg,
+  prio, &handle, MALLOC_CAP_SPIRAM)`. Only for tasks that **never write
+  flash** (NVS, OTA, partitions): a flash write disables the cache, and a
+  PSRAM stack with it. The Wi-Fi task of step 10 writes NVS, so its stack
+  stays internal. Moving four network workers' stacks (42 KB) took ArtShow's
+  lowest free internal RAM from 4 KB to ~40 KB.
+- Few open files (`max_files` small); open databases only while in use.
+- Thousands of LVGL objects don't fit: make a page's cells once and page
+  through the data.
+- **Measure**: log free, largest block and minimum-ever internal RAM
+  (`heap_caps_get_free_size`, `heap_caps_get_largest_free_block`,
+  `heap_caps_get_minimum_free_size` with `MALLOC_CAP_INTERNAL`) while Wi-Fi
+  connects, TLS runs and pages draw at the same time. Aim for 40 KB+ at the
+  lowest; ~90 KB free when idle is comfortable.
+
+### 14.3 Tasks, cores and the watchdog
+
+- FreeRTOS ticks at 100 Hz: `vTaskDelay(1)` is 10 ms. A loop that works in
+  25 ms slices and yields a tick loses a third of its time: use ~100 ms slices.
+- **Anything that computes for seconds without blocking** runs at
+  **`tskIDLE_PRIORITY`**, or yields often. That covers a software JPEG decode
+  (3-9 s, up to 60 s under load), image effects, procedural painting and TLS
+  handshakes. At any higher priority it starves that core's idle task and the
+  task watchdog fires (`task_wdt: ... IDLE1 (CPU 1)`). Equal priorities share
+  the core round-robin, so idle priority still gets the work done.
+- Pin CPU-heavy work to core 1: LVGL, Wi-Fi and esp_hosted keep core 0 busy.
+  Put audio rendering on core 0 if a painter is on core 1.
+- Work the UI waits for (thumbnails, page data) goes to a worker task with a
+  request queue. A newer request makes older ones stale (a sequence number),
+  and results are applied under the LVGL lock.
+- Don't open a heavy page from `app_main`: its stack is small, and a page that
+  opened a database there overflowed it ("Stack protection fault"). Open it
+  from the LVGL task, e.g. a one-shot `lv_timer`.
+
+### 14.4 LVGL and the screen, beyond the demo
+
+LVGL 9.6 API (warnings are often the only sign of a deprecated call):
+- per-flag setters and getters (`lv_obj_set_hidden`, `lv_obj_set_clickable`,
+  `lv_obj_set_overflow_visible`, `lv_obj_is_hidden` ...), not
+  `lv_obj_add_flag`/`has_flag`; `LV_LABEL_LONG_MODE_*`; no `lv_list` (a flex
+  column); `lv_draw_task_get_draw_dsc()` (a draw task's fields are private).
+- The built-in Montserrat fonts are **ASCII only**. For accented letters,
+  typographic quotes and dashes, convert fonts with Latin-1 and Latin
+  Extended-A (`lv_font_conv`). Size labels by the font's `line_height`
+  (Montserrat 16: 22 px), not its nominal size.
+- `LV_LABEL_LONG_MODE_DOTS` only shortens a label **with a fixed height**;
+  without one it wraps over the line below.
+- `lv_calendar`'s highlight is a fill on the day's cell, and a transparent
+  cell draws no fill: make the cells opaque.
+- LVGL keeps 32 invalid areas a frame: invalidate in bands, not per tile.
+- Custom drawing: `LV_EVENT_DRAW_MAIN` (behind the children),
+  `DRAW_MAIN_END`/`DRAW_POST` (over them), `LV_EVENT_DRAW_TASK_ADDED` to
+  restyle what a widget draws (it needs the send-draw-task-events flag). Shapes
+  drawn this way (frames, icons, clock hands) cost no memory and scale. For a
+  full-screen texture, use one small tile as a tiled background image
+  (`lv_obj_set_style_bg_image_tiled`).
+
+Speed:
+- Images the PPA draws (`CONFIG_LV_USE_PPA_IMG`) must be RGB565 buffers
+  **64-byte aligned** (`heap_caps_aligned_alloc(64, ..., MALLOC_CAP_SPIRAM)`),
+  with a row stride that is a multiple of 64 bytes. A full-screen image took
+  ~40 ms by the CPU; the PPA takes a fraction of that.
+- PSRAM bandwidth is the limit: the panel's scan-out (step 3), LVGL's
+  framebuffers and every big buffer share it. A full-screen 1.2 MB PSRAM copy
+  takes ~28 ms; a full-screen redraw per frame gives 7-12 fps. Redraw only
+  what changed.
+- With direct mode and two framebuffers (step 5), the off-screen buffer lags
+  until the next refresh: comparing it with the picture shows differences,
+  and that is normal.
+
+Designing pages:
+- Touch targets 44 px or more; enlarge small ones with
+  `lv_obj_set_ext_click_area`.
+- Buttons that stay on every page (ArtShow: menu top left, brightness bottom
+  left, Wi-Fi bottom right) are styled for dark backgrounds and vanish on a
+  light page. Keep a dark margin under them, or keep content out of the
+  corners.
+- Long text scrolls in a fixed box; captions are fixed-height one-line labels.
+
+Backlight: ArtShow saw the screen **flicker below ~25 %** (worse on white),
+at any PWM frequency from 1 to 30 kHz. Keep 25 % as the floor of a brightness
+control and 0 for "off". The base's `BL_DUTY_FLOOR` (200 / 2047, ~10 %) only
+keeps it lit, so it doesn't stop the flicker.
+
+### 14.5 Wi-Fi in practice: SNTP and HTTPS
+
+- SNTP: start it after `wifi_start()` (which initialises esp_netif), and
+  **restart it on each `IP_EVENT_STA_GOT_IP`**. Its first tries fail before
+  there is an IP, and then it waits ~27 s to retry. Restarted on GOT_IP, the
+  time arrives ~3 s after the IP. Set `TZ` first thing in `app_main` if
+  anything stamps local times before the sync.
+- HTTPS: `esp_http_client` with IDF's certificate bundle.
+- The rev v1.x P4 has no ECDSA peripheral: each handshake verifies in
+  software, **~2 s**, longer when several overlap. Keep one connection open
+  for a run of calls to one server, and cache answers.
+- A handshake is seconds of CPU without a yield: **run network tasks at
+  `tskIDLE_PRIORITY`**. At priority 3 one starved core 1's idle task, and the
+  task watchdog fired again and again.
+- `esp_http_client` didn't follow a relative 302 on the board: don't rely on
+  it for unusual redirects.
+- Never log a URL that carries an API key. Keep keys on the SD card (e.g. a
+  `config.json`), never in sources.
+- Public APIs rate-limit: Wikipedia's search returned HTTP 429 for minutes
+  after a burst. Make one search per lookup, cache answers, and show
+  "busy, try again". Free plans count calls, and every test boot fetches: a
+  day of test reboots used up a 50-calls-a-day weather key.
+
+### 14.6 The microSD card, and why it fights Wi-Fi
+
+- SDMMC **slot 0**, 1-bit: CLK 43, CMD 44, D0 39. D1..D3 can't be used,
+  since 40..42 are touch and LCD lines. Internal pull-ups; the IO is powered
+  by LDO4 at 3.3 V (take it in the board's init). 20 MHz is fine; use 10 MHz
+  if a card is flaky.
+- **Set `host.slot = SDMMC_HOST_SLOT_0` by hand**: on the P4,
+  `SDMMC_HOST_DEFAULT()` picks slot 1. A mount on slot 1 fails, its cleanup
+  removes esp_hosted's slot, esp_hosted asserts, and the board reboots in a
+  loop.
+- esp_hosted owns **slot 1 of the same SDMMC host**: never deinit the host,
+  only slot 0.
+- **Mount the card once, before `wifi_start()`.** A card init changes the
+  controller's clock. Doing it while the C6 link is up, or coming up, times out
+  (0x107), breaks the link ("Unrecoverable host sdio state") and restarts the
+  board. Reads and writes once both are up are fine. No remounts: if the card
+  goes, say so and offer a restart.
+- **A card left mid-read** by a board reset (the card keeps its power) holds
+  D0 low, and the first clock update jams the whole host, Wi-Fi too. Before
+  mounting, clock the card by hand and send CMD0 (an "unstick" step).
+- The board is reset, never shut down, and a file's size reaches the card
+  only when the file is synced or closed. SQLite on FAT needs
+  `PRAGMA synchronous = FULL`: with NORMAL, the next boot read the database as
+  "disk I/O error". FAT has no locks: one connection, one thread
+  (`SQLITE_THREADSAFE=0` plus a mutex), no WAL, temp in memory. A database
+  that is only a cache may be rebuilt when unreadable. One with the user's
+  data must be renamed aside and kept, never replaced.
+- 1-bit SD is slow: ~1.5-3 s to read a 3 MB file, much longer when the CPU is
+  busy. Stream downloads to the card in chunks (16 KB).
+
+### 14.7 Images and JPEG
+
+- The **hardware JPEG engine** is fast (~50 ms), but **baseline only**, can't
+  scale, and the full-size output must fit in memory (8 MB of RGB565 is ~4 MP).
+- **esp_new_jpeg** (software) shrinks by 1/2, 1/4 or 1/8 while decoding, so a
+  4096 px picture fits; it takes ~3-9 s. Also baseline only: skip progressive
+  JPEGs, and say why. It also encodes (quality 75-92; 4:4:4 keeps thin
+  coloured lines). Neither applies EXIF rotation.
+- Box-scale into the target size afterwards; keep output buffers 64-byte
+  aligned for the PPA (14.4).
+
+### 14.8 Maths and speed on the P4 (measured)
+
+- The FPU is **single precision**: doubles are software. That's fine for a few
+  thousand operations (astronomy once a day), not per pixel.
+- A float op takes ~6 cycles; `sinf` ~6 us (a 4096-entry table is 25x
+  faster); `logf` ~0.35 us (use a table for per-pixel tone maps); a random
+  write to a PSRAM buffer ~0.9 us.
+- Build pixel loops at `-O2` even when the app is `-Og`
+  (`set_source_files_properties(... COMPILE_OPTIONS "-O2")`). With -O2 and a
+  tighter loop, a diffusion filter went from 94 s to 15 s. Interleave
+  channels, use fixed point where it's simpler, flush denormals.
+- Paint big pictures off the LVGL task, in place, and invalidate when done.
+- Keep pure computation (image effects, painters, synthesis, astronomy) in
+  plain C files with no IDF includes, like `digit_prep.c` (step 12). Then it
+  builds and runs on the computer first: render a 1024 x 600 RGB565 file or a
+  WAV there, look at it, then move it to the board.
+
+### 14.9 Audio in practice
+
+- Turn the amps on (GPIO 30 **low**) only while playing: off, they're silent.
+- Enable the I2S channel's auto-clear, so gaps between writes are silence,
+  not a buzz. Feed the DMA from one task in short blocks (e.g. 16 ms); the DMA
+  paces it.
+- USB audio out, a USB DAC on J16: the P4's host can do UAC 1.0, but the
+  socket gives no 5 V (the DAC must be self-powered or on a powered hub),
+  split transactions aren't supported (a full-speed DAC behind a high-speed hub
+  fails), and IDF 6.1 has no full-speed-only option.
+
+### 14.10 Testing on the board
+
+- **Check the build's exit code before flashing.** A failed build followed by
+  `flash` writes the *previous* binary, and the test then "passes" or "fails"
+  on old code.
+- Capture logs without an interactive monitor: a small pyserial script that
+  pulses RTS (reset), reads for N seconds into a file, and is then grepped.
+  Grep for `Guru`, `abort`, `assert`, `task_wdt`, `not enough mem`, `-0x`, and
+  your own module's lines.
+- Open the page under test from **a one-shot `lv_timer`**, a few seconds after
+  boot, not from `app_main` (14.3).
+- Mark temporary test code (`/* TEST */`), keep a copy of the file before
+  adding it, and restore and rebuild before committing. While testing
+  anything new, log internal RAM and PSRAM every few seconds (14.2).
+- Tests that write to the card leave files behind (a test that pressed Save
+  put its pictures in the slideshow): delete them after.
+- An agent can't see the screen: report what the log showed, and ask a person
+  to look at the rest.
+- Write down what each pitfall cost (symptom, cause, fix) where the next
+  person or agent will read it: the project's `CLAUDE.md`.
 
 ## Where this came from
 
@@ -1148,5 +1449,8 @@ To retrain (e.g. with your own drawings added): see the docstring of
   - `in_color_format` and `on_frame_buf_complete`;
   - `esp_lcd_ek79007` 2.0.2, esp_lvgl_port 2.9.0 and LVGL 9.6;
   - both esp_hosted lines and their option names.
+- Step 14 is from building **ArtShow** with the wizard on the bench 10.1",
+  ESP-IDF 6.1 (2026-10): its `docs/guide_for_agent_advance-p4.md`, also kept
+  in this repository's `docs/`. The measurements are ArtShow's.
 - esp_hosted compatibility is from the esp_hosted 3.0.9 component's own
   `docs/migration.md` and `docs/troubleshooting.md`.
