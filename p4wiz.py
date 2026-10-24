@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """p4wiz.py - scaffold a new ESP-IDF 6.x app for the Elecrow CrowPanel Advanced 7" / 10.1"
-(ESP32-P4, hardware V1.2), from template/base plus the optional Wi-Fi and audio modules.
+(ESP32-P4, hardware V1.2), from template/base plus the optional Wi-Fi, audio, AI and BME690 modules.
 
 It applies exactly the wiring of tools/assemble_reference.sh (see CLAUDE.md and
 docs/advance-p4-cookbook.md), plus the AI module (handwritten digits, ESP-DL).
@@ -33,6 +33,7 @@ REV_V3_BLOCK = """\
 """
 APP_END = "        lvgl_port_unlock();\n    }\n}"
 AI_FILES = ("digit.c", "digit.h", "digit_prep.c", "digit_prep.h", "digit_model.cpp")
+BME690_FILES = ("bme690.c", "bme690.h", "bme69x.c", "bme69x.h", "bme69x_defs.h", "LICENSE.bme69x")
 
 
 def die(msg):
@@ -145,7 +146,7 @@ def replace_once(s, old, new, what):
     return s.replace(old, new, 1)
 
 
-def assemble(dest, name, wifi, audio, ai, rev):
+def assemble(dest, name, wifi, audio, ai, bme690, rev):
     shutil.copytree(BASE, dest)
     main = os.path.join(dest, "main")
     srcs, reqs, includes, calls, ui = [], [], [], [], []
@@ -194,13 +195,21 @@ def assemble(dest, name, wifi, audio, ai, rev):
         includes.append('#include "digit.h"')
         ui.append("        digit_ui_create(lv_screen_active());")
 
+    if bme690:   # Bosch's BME69x Sensor API, vendored, on board.c's I2C bus
+        for f in BME690_FILES:
+            shutil.copy(os.path.join(MODS, "bme690", f), main)
+        srcs += ['"bme690.c"', '"bme69x.c"']
+        includes.append('#include "bme690.h"')
+        ui.append("        bme690_ui_create(lv_screen_active());")
+        calls.append("    bme690_start();")
+
     if wifi:
         calls.append("    wifi_start();")   # last: its scan blocks
 
     if srcs:
         edit(os.path.join(main, "CMakeLists.txt"), lambda s: replace_once(
             replace_once(s, 'SRCS "main.c" "board.c"', 'SRCS "main.c" "board.c" ' + " ".join(srcs), "SRCS"),
-            "esp_hw_support)", "esp_hw_support " + " ".join(reqs) + ")", "REQUIRES"))
+            "esp_hw_support)", " ".join(["esp_hw_support"] + reqs) + ")", "REQUIRES"))
         edit(os.path.join(main, "main.c"), lambda s: replace_once(
             replace_once(s, '#include "esp_log.h"', '#include "esp_log.h"\n' + "\n".join(includes), "include"),
             APP_END, "        lvgl_port_unlock();\n    }\n" + "".join(c + "\n" for c in calls) + "}", "app_main end"))
@@ -222,7 +231,7 @@ def assemble(dest, name, wifi, audio, ai, rev):
         f.write("build/\nmanaged_components/\nsdkconfig\nsdkconfig.old\n")
 
 
-def write_claude_md(dest, name, wifi, audio, ai, rev, idf_env, port):
+def write_claude_md(dest, name, wifi, audio, ai, bme690, rev, idf_env, port):
     """CLAUDE.md for the new project: template/claude/base.md plus a part per module"""
     mods, files, parts = [], [], []
     if wifi:
@@ -238,6 +247,10 @@ def write_claude_md(dest, name, wifi, audio, ai, rev, idf_env, port):
         files.append("| `main/digit*.c/.h`, `main/digit_model.cpp`, `main/models/` | the AI demo: see AI below |")
         files.append("| `partitions.csv` | the AI module's partition table (6 MB app) |")
         parts.append("ai.md")
+    if bme690:
+        mods.append("a BME690 sensor")
+        files.append("| `main/bme690.c/.h`, `main/bme69x*` | the BME690 on the I2C connector: see BME690 below |")
+        parts.append("bme690.md")
     rev_text = ("**rev v1.x** (the bench board is v1.3): `sdkconfig.defaults` builds for it." if rev == "v1" else
                 "**rev v3.x**: `sdkconfig.defaults` keeps IDF 6.x's defaults (rev >= 3.1). "
                 "**Untested on hardware**: only rev v1.3 boards have run these files.")
@@ -293,6 +306,8 @@ def main():
     ap.add_argument("--audio", action=argparse.BooleanOptionalAction, help="the speaker (plain I2S)")
     ap.add_argument("--ai", action=argparse.BooleanOptionalAction,
                     help="the AI demo: draw a digit, an int8 CNN on the P4 (ESP-DL) names it")
+    ap.add_argument("--bme690", action=argparse.BooleanOptionalAction,
+                    help="a BME690 sensor (temperature, humidity, pressure, gas) on the I2C connector")
     ap.add_argument("--chip-rev", choices=["v1", "v3", "detect"],
                     help="the P4's revision: v1 (bench board: v1.3), v3, or detect with esptool")
     ap.add_argument("--port", help="the board's UART socket, for detect / backup / flash (e.g. /dev/ttyUSB3)")
@@ -338,6 +353,9 @@ def main():
     if a.ai is None:
         a.ai = ask_yn("The AI demo (draw a digit, ESP-DL recognizes it)?", False) if asking else False
 
+    if a.bme690 is None:
+        a.bme690 = ask_yn("A BME690 sensor on the I2C connector (temperature, humidity, pressure, gas)?", False) if asking else False
+
     if a.claude_md is None:
         a.claude_md = ask_yn("A CLAUDE.md for further development with Claude Code?", True) if asking else True
 
@@ -371,11 +389,11 @@ def main():
         backup(a.port, a.idf_env, a.backup)
     rev = detect_rev(a.port, a.idf_env) if a.chip_rev == "detect" else a.chip_rev
 
-    assemble(dest, name, wifi, a.audio, a.ai, rev)
+    assemble(dest, name, wifi, a.audio, a.ai, a.bme690, rev)
     if a.claude_md:
-        write_claude_md(dest, name, wifi, a.audio, a.ai, rev, a.idf_env, a.port)
+        write_claude_md(dest, name, wifi, a.audio, a.ai, a.bme690, rev, a.idf_env, a.port)
     print(f"\ncreated {dest}")
-    print(f"  project {name}; Wi-Fi: {wifi or 'none'}; audio: {'yes' if a.audio else 'no'}; AI: {'yes' if a.ai else 'no'}; chip rev {rev}.x"
+    print(f"  project {name}; Wi-Fi: {wifi or 'none'}; audio: {'yes' if a.audio else 'no'}; AI: {'yes' if a.ai else 'no'}; BME690: {'yes' if a.bme690 else 'no'}; chip rev {rev}.x"
           f"{'; CLAUDE.md' if a.claude_md else ''}")
 
     if a.build:
@@ -408,6 +426,8 @@ then go through docs/advance-p4-cookbook.md step 9 on the board.""")
         print("Wi-Fi: set the network on screen (the button top left), or in idf.py menuconfig > CrowPanel Wi-Fi.")
     if a.ai:
         print("The digit model has never run on the board: try a few drawn digits (the log shows what it saw).")
+    if a.bme690:
+        print("BME690: CS to 3.3 V, SDO to GND (0x76) or 3.3 V (0x77); the boot's I2C scan should list it.")
     if rev == "v3":
         print("Chip rev v3.x: the sdkconfig for it is untested on hardware.")
 

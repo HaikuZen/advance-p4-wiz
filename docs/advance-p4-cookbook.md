@@ -11,7 +11,8 @@ for the Elecrow **CrowPanel Advanced 7" / 10.1"** (ESP32-P4, hardware
 - a demo screen that checks colours and touch.
 
 Optional sections add **Wi-Fi** through the onboard ESP32-C6, the
-**speaker**, and an **AI** demo (handwritten digits with ESP-DL). Step 14
+**speaker**, an **AI** demo (handwritten digits with ESP-DL) and, in step 15, a
+**BME690** environment sensor on the I2C connector. Step 14
 covers growing the skeleton into a real app: memory, tasks, LVGL, HTTPS, the
 microSD card, JPEG, testing. It comes from building ArtShow on this board.
 
@@ -1158,6 +1159,7 @@ To retrain (e.g. with your own drawings added): see the docstring of
 | SQLite "disk I/O error" after a reset | `synchronous = NORMAL` on FAT | `PRAGMA synchronous = FULL`, one connection, no WAL (14.6) |
 | the clock is set ~30 s late | SNTP's first tries ran before there was an IP | restart SNTP on each `IP_EVENT_STA_GOT_IP` (14.5) |
 | a JPEG won't decode | progressive JPEG: both decoders are baseline only | skip it and say why (14.7) |
+| no BME690 in the I2C scan | CS low or floating (SPI mode), or the connector's pins swapped | CS to 3.3 V, check the pin order with a meter (step 15) |
 | accented letters show as boxes | the built-in Montserrat fonts are ASCII only | convert fonts with Latin-1 + Latin Extended-A (14.4) |
 | a `DOTS` label wraps over the line below | `LV_LABEL_LONG_MODE_DOTS` needs a fixed height | give the label a height (14.4) |
 | the digit model is sure of the wrong digit | the input doesn't look like MNIST | read the ASCII input in the log; adjust `BRUSH_R` or `digit_prep.c`, or retrain with your drawings |
@@ -1433,6 +1435,105 @@ keeps it lit, so it doesn't stop the flicker.
   to look at the rest.
 - Write down what each pitfall cost (symptom, cause, fix) where the next
   person or agent will read it: the project's `CLAUDE.md`.
+
+## 15. Optional: a BME690 sensor on the I2C connector
+
+The BME690 measures temperature, humidity, pressure and gas (the resistance of
+a heated metal-oxide plate). The module drives it with Bosch's own BME69x
+Sensor API, on the I2C bus the board already runs for the GT911.
+
+### Wiring
+
+The board's **I2C connector** is a PH2.0 4-pin socket (2.0 mm pitch): SDA on
+GPIO 45, SCL on GPIO 46, 3.3 V out, up to 1 A (Elecrow's wiki). It's the
+touch controller's bus.
+
+| BME690 pin | to | why |
+|---|---|---|
+| VCC | 3.3 V | the chip takes 1.71-3.6 V; 5 V only if the breakout has its own regulator |
+| GND | GND | |
+| SCL | SCL, GPIO 46 | |
+| SDA | SDA, GPIO 45 | |
+| CS | **3.3 V** | CS high at power-up selects I2C; low selects SPI, and then nothing answers on I2C |
+| SDO | **GND** (0x76) or 3.3 V (0x77) | the address; neither clashes with 0x2f or 0x5d |
+
+- Elecrow's wiki doesn't give the connector's pin order: read it off the
+  silkscreen or the V1.2 schematic, and check 3.3 V and GND with a meter
+  before plugging the sensor in.
+- Many breakouts already pull CS and SDO to a level; tie them anyway, since a
+  floating CS is the usual reason nothing answers.
+- The bus has its own pull-ups (and the P4's internal ones, enabled in
+  `board.c`). A breakout's 10k pull-ups in parallel are fine on a short cable.
+- **Check:** the boot's I2C scan (step 9) lists `0x76` (or `0x77`) next to
+  `0x2f 0x5d`.
+
+### Files
+
+From `template/modules/bme690/` into `main/`:
+- `bme69x.c`, `bme69x.h`, `bme69x_defs.h`: Bosch's BME69x Sensor API v1.1.0
+  (https://github.com/boschsensortec/BME690_SensorAPI, commit 8a4d922),
+  unchanged, with its licence as `LICENSE.bme69x` (BSD-3). Float output
+  (`BME69X_USE_FPU`, the API's default).
+- `bme690.c/.h`: the glue, ~140 lines:
+  - `bme690_start()` probes 0x76, then 0x77, adds the device to
+    `board_i2c_bus()` at 400 kHz, runs `bme69x_init` (soft reset, chip id
+    0x61, calibration), and starts a task (priority 2, 4 KB stack);
+  - the task configures oversampling (T 8x, P 4x, H 2x) and the heater
+    (300 °C for 100 ms), then every 3 s triggers a forced measurement, waits
+    `bme69x_get_meas_dur()` plus the heater time, reads, logs and updates the
+    card under the LVGL lock;
+  - `bme690_ui_create()` puts a readings card at the left middle of the demo
+    screen; `bme690_latest()` returns the last reading;
+  - no `ESP_ERROR_CHECK`: without a sensor it logs a warning and stops, the
+    app runs on.
+
+The three callbacks the API needs:
+
+```c
+static BME69X_INTF_RET_TYPE rd(uint8_t reg, uint8_t *data, uint32_t len, void *ctx) {
+    return i2c_master_transmit_receive(s_dev, &reg, 1, data, len, 100) == ESP_OK ? 0 : -1;
+}
+
+/* the API passes reg_data as value, reg, value, ... after reg: one transfer */
+static BME69X_INTF_RET_TYPE wr(uint8_t reg, const uint8_t *data, uint32_t len, void *ctx) {
+    uint8_t buf[BME69X_LEN_INTERLEAVE_BUFF];   /* reg + at most 19 bytes */
+    if (len >= sizeof buf) return -1;
+    buf[0] = reg;
+    memcpy(buf + 1, data, len);
+    return i2c_master_transmit(s_dev, buf, len + 1, 100) == ESP_OK ? 0 : -1;
+}
+
+/* the tick is 10 ms: busy-wait the short delays, sleep the long ones */
+static void delay_us(uint32_t us, void *ctx) {
+    if (us < 10000) esp_rom_delay_us(us);
+    else vTaskDelay(pdMS_TO_TICKS((us + 9999) / 1000));
+}
+```
+
+### Wiring it in
+
+- copy the files above into `main/`;
+- in `main/CMakeLists.txt`, add `"bme690.c" "bme69x.c"` to SRCS (the base's
+  `esp_driver_i2c` covers the rest);
+- call `bme690_ui_create(lv_screen_active())` right after `build_ui()`, inside
+  the LVGL lock, and `bme690_start()` at the end of `app_main` (before
+  `wifi_start()`).
+
+Notes:
+- **One bus.** Add devices to `board_i2c_bus()`; never create a second bus on
+  GPIO 45/46. The i2c_master driver locks the bus per transfer, so the touch
+  task and the sensor task share it safely.
+- **Gas** is valid only when the status has both `GASM_VALID` and
+  `HEAT_STAB`, and it drifts for minutes after power-up. It is a raw
+  resistance: an air-quality index (IAQ, eCO2) needs Bosch's BSEC library,
+  which is closed source under its own licence and not included.
+- The heater warms the sensor, so the temperature can read a little high;
+  a longer period (less heater duty) or a calibration against a thermometer
+  helps.
+
+**Check:** the log shows `bme690: BME690 at 0x76, chip id 0x61, ...`, then a
+line every 3 s, in the form `23.41 C, 45.20 %RH, 1013.25 hPa, gas 52000 ohm`. The card
+shows the same; breathe on the sensor and the humidity climbs.
 
 ## Where this came from
 

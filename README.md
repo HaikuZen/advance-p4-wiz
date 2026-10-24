@@ -14,7 +14,8 @@ Optional modules add:
 - **Wi-Fi**, through the onboard ESP32-C6;
 - **the speaker**;
 - **an AI demo:** draw a digit on the screen, and a small neural network running
-  on the P4 (Espressif's ESP-DL) names it.
+  on the P4 (Espressif's ESP-DL) names it;
+- **a BME690 sensor** (temperature, humidity, pressure, gas) on the I2C connector.
 
 ```sh
 ./p4wiz.py ~/projects/my_app --wifi hosted2 --audio --ai -y
@@ -47,6 +48,7 @@ Or give everything on the command line:
 | `--wifi hosted2\|hosted3\|none` | Wi-Fi through the onboard ESP32-C6. **`hosted2`** (esp_hosted 2.12.x) matches the firmware Elecrow ships on the C6 and is recommended. `hosted3` (esp_hosted 3.x) is documented as working with it too |
 | `--audio` / `--no-audio` | the speaker: plain I2S, and a beep at boot |
 | `--ai` / `--no-ai` | the handwritten-digit demo (ESP-DL). The app grows to about 2.6 MB, so the module brings its own partition table (a 6 MB app partition) |
+| `--bme690` / `--no-bme690` | a BME690 sensor on the board's I2C connector, read every 3 s, shown on a card and in the log. Wiring: VCC 3.3 V, GND, SDA, SCL, **CS to 3.3 V** (I2C mode), SDO to GND (address 0x76) or 3.3 V (0x77). See cookbook step 15 |
 | `--chip-rev v1\|v3\|detect` | the P4's chip revision (see below). Default: `v1` |
 | `--claude-md` / `--no-claude-md` | also write a `CLAUDE.md` into the project, for further work on it with [Claude Code](https://claude.com/claude-code): its files, how to build and flash it, the board's rules and pitfalls, and a section per module chosen. Default: yes |
 | `--port PORT` | the board's serial port, needed by `detect`, `--backup` and `--flash` |
@@ -54,7 +56,7 @@ Or give everything on the command line:
 | `--build` | also build the app, then run `--check`. Needs `idf.py` on your PATH (run the wizard from an ESP-IDF terminal, step 2) or `--idf-env` |
 | `--flash` | also build, flash and open the monitor |
 | `--idf-env SCRIPT` | run the IDF commands through a wrapper script, if `idf.py` isn't on your PATH |
-| `-y` | ask nothing: anything not given takes its default (no Wi-Fi, no audio, no AI, rev v1, a CLAUDE.md) |
+| `-y` | ask nothing: anything not given takes its default (no Wi-Fi, no audio, no AI, no BME690, rev v1, a CLAUDE.md) |
 | `--check DIR` | check a built project (see step 3) |
 
 ### The chip revision matters
@@ -192,6 +194,7 @@ I (...) board: I2C scan: 0x2f 0x5d
 I (...) board: GT911 ready
 I (...) board: CrowPanel P4 up: 1024x600, 2 lanes x 900 Mbps, 51 MHz dpi
 I (...) digit: model loaded: ...          (with --ai)
+I (...) bme690: BME690 at 0x76, ...      (with --bme690; the I2C scan also lists 0x76)
 ```
 
 On the screen:
@@ -218,6 +221,7 @@ Tested on a CrowPanel Advanced **10.1" V1.2** with a rev v1.3 P4, on ESP-IDF
 | Wi-Fi, esp_hosted 2.12.x (`hosted2`) | built, **flashed, works**: the scan, and joining a WPA2 network set on screen (IP by DHCP, saved across reboots by design). The menuconfig network and reconnecting after a drop: not tried yet |
 | Wi-Fi, esp_hosted 3.x (`hosted3`) | built only |
 | speaker | built only on IDF 6. Works on the same board under IDF 5.4 |
+| BME690 sensor | built only: no sensor tried on the board yet |
 | `--chip-rev v3` | built only. No rev v3 board tried |
 | 7" panel | not tried |
 
@@ -230,7 +234,7 @@ the part most likely to need fixes.**
 |---|---|
 | `p4wiz.py` | the wizard |
 | `template/base/` | the base app the wizard starts from |
-| `template/modules/` | the Wi-Fi, audio and AI modules |
+| `template/modules/` | the Wi-Fi, audio, AI and BME690 modules |
 | `template/claude/` | the parts of the CLAUDE.md that `--claude-md` writes: `base.md`, then one per module |
 | `docs/advance-p4-cookbook.md` | the same thing by hand, step by step, with every pitfall found so far. Step 14: growing the skeleton into a real app (memory, tasks, LVGL, HTTPS, microSD, JPEG, testing) |
 | `docs/guide_for_agent_advance-p4.md` | the same lessons as one guide for coding agents, from building ArtShow |

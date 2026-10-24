@@ -16,7 +16,8 @@ plus the verified building blocks it assembles.
 | `template/modules/wifi/` | Wi-Fi through the onboard ESP32-C6 (esp_hosted): `wifi.c/h` (one Wi-Fi task: a scan, then join the network saved on screen in NVS, else the menuconfig one, and keep rejoining), `wifi_ui.c` (on-screen setup: a status button, a scan list, a password field, Forget), `Kconfig.projbuild` (the menuconfig fallback network), with config and dependency fragments for esp_hosted **2.12.x** (`*hosted2*`, recommended) or **3.x** (`*hosted3*`) |
 | `template/modules/audio/` | the speaker: plain I2S, no codec (`audio_init`, `audio_beep`) |
 | `template/modules/ai/` | AI demo: a drawing pad, and an int8 CNN that ESP-DL runs on the P4 names the digit. `models/digit.espdl` is built by `tools/train_digit_model.py` |
-| `template/claude/` | the generated project's `CLAUDE.md` (`--claude-md`): `base.md` plus `wifi.md`, `audio.md`, `ai.md` for the modules chosen, filled in with `string.Template` (`$name`, `$port`, `${idf}`, ...). Keep them true to the templates when those change |
+| `template/modules/bme690/` | a BME690 on the I2C connector: `bme690.c/h` (finds it at 0x76/0x77 on `board_i2c_bus()`, a task reads it in forced mode every 3 s, a readings card), plus Bosch's BME69x Sensor API v1.1.0 vendored unchanged (`bme69x.c/h`, `bme69x_defs.h`, `LICENSE.bme69x`, BSD-3) |
+| `template/claude/` | the generated project's `CLAUDE.md` (`--claude-md`): `base.md` plus `wifi.md`, `audio.md`, `ai.md`, `bme690.md` for the modules chosen, filled in with `string.Template` (`$name`, `$port`, `${idf}`, ...). Keep them true to the templates when those change |
 | `tools/train_digit_model.py` | trains the digit CNN on MNIST (augmented toward finger strokes) and exports it with esp-ppq. Needs `tools/requirements-ai.txt` in a Python 3.12 venv; see its docstring |
 | `tools/test_digit_prep.py` | compiles the board's `digit_prep.c` on the host and scores the model on MNIST digits redrawn as the pad sees them |
 | `tools/assemble_reference.sh` | reference assembly, base + Wi-Fi + audio: exactly which lines a module adds where. The wizard must reproduce this wiring |
@@ -26,13 +27,13 @@ plus the verified building blocks it assembles.
 
 ```sh
 ./p4wiz.py                                  # interactive: asks for what isn't given
-./p4wiz.py DIR --wifi hosted2|hosted3|none --audio|--no-audio --ai|--no-ai --chip-rev v1|v3|detect -y
+./p4wiz.py DIR --wifi hosted2|hosted3|none --audio|--no-audio --ai|--no-ai --bme690|--no-bme690 --chip-rev v1|v3|detect -y
 ./p4wiz.py DIR -y --idf-env tools/idf61.sh --build    # + set-target, build, --check
 ./p4wiz.py DIR -y --no-claude-md            # without the new project's CLAUDE.md
 ./p4wiz.py --check DIR                      # every sdkconfig.defaults line in sdkconfig?
 ```
 
-- `-y`, or no terminal: defaults for anything not given (no Wi-Fi, no audio, no AI, rev v1, a CLAUDE.md).
+- `-y`, or no terminal: defaults for anything not given (no Wi-Fi, no audio, no AI, no BME690, rev v1, a CLAUDE.md).
 - `--name` sets the CMake project name (default: the directory name).
 - `--port` is the board's UART socket, needed by `detect`, `--backup FILE` (a full
   16 MB read) and `--flash` (flash + monitor). All three run at 460800 baud.
@@ -45,8 +46,8 @@ plus the verified building blocks it assembles.
 - It refuses paths with `[` / `]`, existing directories and invalid project names.
 - The edits fail loudly if a template anchor moves. With Wi-Fi + audio, its
   output is byte-identical to `tools/assemble_reference.sh` (apart from `.gitignore` and `CLAUDE.md`).
-  Keep the two in sync when changing the templates. The AI module is wizard-only:
-  the reference script doesn't add it.
+  Keep the two in sync when changing the templates. The AI and BME690 modules are
+  wizard-only: the reference script doesn't add them.
 
 ### How a module plugs into the base
 
@@ -83,6 +84,16 @@ all of them.
     ESP-DL needs and `EMBED_FILES` doesn't guarantee);
   - call `digit_ui_create(lv_screen_active())` right after `build_ui()`, inside
     the LVGL lock. It loads the model too.
+- **BME690:**
+  - copy `bme690.c/.h`, `bme69x.c/.h`, `bme69x_defs.h` and `LICENSE.bme69x`
+    into `main/`;
+  - in `main/CMakeLists.txt`, add `"bme690.c" "bme69x.c"` to SRCS (no new
+    REQUIRES: the base has `esp_driver_i2c`);
+  - call `bme690_ui_create(lv_screen_active())` right after `build_ui()`,
+    inside the LVGL lock, and `bme690_start()` at the end of `app_main`,
+    before `wifi_start()`.
+  - Wiring: the I2C connector (SDA 45, SCL 46, 3.3 V), CS to 3.3 V, SDO to
+    GND (0x76) or 3.3 V (0x77). Never a second bus on 45/46.
 - **Project name:** set it in the root `CMakeLists.txt`, `project(my_p4_app)`.
 
 ## Verification status (2026-10-18)
@@ -104,6 +115,11 @@ all of them.
   digits redrawn finger-wide through the board's `digit_prep.c` on the host
   (`tools/test_digit_prep.py`). **Never run on the board**: neither ESP-DL on
   this chip nor real finger drawings.
+
+- the BME690 module (2026-10-24), generated by `p4wiz.py --build`, each passing
+  `--check` with no warnings, Bosch's BME69x API included: alone, and with
+  Wi-Fi 2.12.x + audio + AI (app 3.0 MB of 6 MB). **No sensor wired yet**: the
+  wiring, the I2C callbacks and the readings are untested on the board.
 
 **Flashed once from an IDF 6.x build (2026-10-18)**, AI-only (base + AI module),
 on the bench 10.1":
