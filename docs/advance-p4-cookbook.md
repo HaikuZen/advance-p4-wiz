@@ -1460,8 +1460,10 @@ touch controller's bus.
 - Elecrow's wiki doesn't give the connector's pin order: read it off the
   silkscreen or the V1.2 schematic, and check 3.3 V and GND with a meter
   before plugging the sensor in.
-- Many breakouts already pull CS and SDO to a level; tie them anyway, since a
-  floating CS is the usual reason nothing answers.
+- Many breakouts already pull CS and SDO to a level. On the bench board, a
+  breakout wired with only VCC, GND, SCL and SDA answered at **0x77**: it pulls
+  both up. If yours doesn't answer, tie CS to 3.3 V: a floating CS is the usual
+  reason.
 - The bus has its own pull-ups (and the P4's internal ones, enabled in
   `board.c`). A breakout's 10k pull-ups in parallel are fine on a short cable.
 - **Check:** the boot's I2C scan (step 9) lists `0x76` (or `0x77`) next to

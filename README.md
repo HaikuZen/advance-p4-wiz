@@ -218,10 +218,10 @@ Tested on a CrowPanel Advanced **10.1" V1.2** with a rev v1.3 P4, on ESP-IDF
 |---|---|
 | base app: panel, touch, backlight, colours | built, **flashed, works** |
 | AI digit demo | built, **flashed, works** (~3 ms per digit) |
-| Wi-Fi, esp_hosted 2.12.x (`hosted2`) | built, **flashed, works**: the scan, and joining a WPA2 network set on screen (IP by DHCP, saved across reboots by design). The menuconfig network and reconnecting after a drop: not tried yet |
+| Wi-Fi, esp_hosted 2.12.x (`hosted2`) | built, **flashed, works**: the scan, and joining a WPA2 network set on screen (IP by DHCP), and rejoining it after a power-on. The menuconfig network and reconnecting after a drop: not tried yet |
 | Wi-Fi, esp_hosted 3.x (`hosted3`) | built only |
 | speaker | built only on IDF 6. Works on the same board under IDF 5.4 |
-| BME690 sensor | built only: no sensor tried on the board yet |
+| BME690 sensor | built; a 4-wire breakout answers at 0x77 on the board's I2C scan. The module itself not run yet |
 | `--chip-rev v3` | built only. No rev v3 board tried |
 | 7" panel | not tried |
 
