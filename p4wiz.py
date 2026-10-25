@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """p4wiz.py - scaffold a new ESP-IDF 6.x app for the Elecrow CrowPanel Advanced 7" / 10.1"
-(ESP32-P4, hardware V1.2), from template/base plus the optional Wi-Fi, audio, AI and BME690 modules.
+(ESP32-P4, hardware V1.2), from template/base plus the optional Wi-Fi, audio, AI, BME690 and mic modules.
 
 It applies exactly the wiring of tools/assemble_reference.sh (see CLAUDE.md and
 docs/advance-p4-cookbook.md), plus the AI module (handwritten digits, ESP-DL).
@@ -33,6 +33,7 @@ REV_V3_BLOCK = """\
 """
 APP_END = "        lvgl_port_unlock();\n    }\n}"
 AI_FILES = ("digit.c", "digit.h", "digit_prep.c", "digit_prep.h", "digit_model.cpp")
+MIC_FILES = ("mic.c", "mic.h")
 BME690_FILES = ("bme690.c", "bme690.h", "bme69x.c", "bme69x.h", "bme69x_defs.h", "LICENSE.bme69x")
 
 
@@ -146,7 +147,7 @@ def replace_once(s, old, new, what):
     return s.replace(old, new, 1)
 
 
-def assemble(dest, name, wifi, audio, ai, bme690, rev):
+def assemble(dest, name, wifi, audio, ai, bme690, mic, rev):
     shutil.copytree(BASE, dest)
     main = os.path.join(dest, "main")
     srcs, reqs, includes, calls, ui = [], [], [], [], []
@@ -195,6 +196,18 @@ def assemble(dest, name, wifi, audio, ai, bme690, rev):
         includes.append('#include "digit.h"')
         ui.append("        digit_ui_create(lv_screen_active());")
 
+    if mic:   # I2S0 in PDM RX mode, the only port that can: the speaker moves to I2S1
+        for f in MIC_FILES:
+            shutil.copy(os.path.join(MODS, "mic", f), main)
+        if audio:
+            edit(os.path.join(main, "audio.c"), lambda s: replace_once(
+                s, "I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0,", "I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1,", "audio I2S port"))
+        srcs.append('"mic.c"')
+        reqs.append("esp_driver_i2s")
+        includes.append('#include "mic.h"')
+        ui.append("        mic_ui_create(lv_screen_active());")
+        calls.append("    mic_start();")
+
     if bme690:   # Bosch's BME69x Sensor API, vendored, on board.c's I2C bus
         for f in BME690_FILES:
             shutil.copy(os.path.join(MODS, "bme690", f), main)
@@ -209,7 +222,7 @@ def assemble(dest, name, wifi, audio, ai, bme690, rev):
     if srcs:
         edit(os.path.join(main, "CMakeLists.txt"), lambda s: replace_once(
             replace_once(s, 'SRCS "main.c" "board.c"', 'SRCS "main.c" "board.c" ' + " ".join(srcs), "SRCS"),
-            "esp_hw_support)", " ".join(["esp_hw_support"] + reqs) + ")", "REQUIRES"))
+            "esp_hw_support)", " ".join(dict.fromkeys(["esp_hw_support"] + reqs)) + ")", "REQUIRES"))
         edit(os.path.join(main, "main.c"), lambda s: replace_once(
             replace_once(s, '#include "esp_log.h"', '#include "esp_log.h"\n' + "\n".join(includes), "include"),
             APP_END, "        lvgl_port_unlock();\n    }\n" + "".join(c + "\n" for c in calls) + "}", "app_main end"))
@@ -231,7 +244,7 @@ def assemble(dest, name, wifi, audio, ai, bme690, rev):
         f.write("build/\nmanaged_components/\nsdkconfig\nsdkconfig.old\n")
 
 
-def write_claude_md(dest, name, wifi, audio, ai, bme690, rev, idf_env, port):
+def write_claude_md(dest, name, wifi, audio, ai, bme690, mic, rev, idf_env, port):
     """CLAUDE.md for the new project: template/claude/base.md plus a part per module"""
     mods, files, parts = [], [], []
     if wifi:
@@ -247,6 +260,10 @@ def write_claude_md(dest, name, wifi, audio, ai, bme690, rev, idf_env, port):
         files.append("| `main/digit*.c/.h`, `main/digit_model.cpp`, `main/models/` | the AI demo: see AI below |")
         files.append("| `partitions.csv` | the AI module's partition table (6 MB app) |")
         parts.append("ai.md")
+    if mic:
+        mods.append("the microphone")
+        files.append("| `main/mic.c/.h` | the PDM microphone: see Microphone below |")
+        parts.append("mic.md")
     if bme690:
         mods.append("a BME690 sensor")
         files.append("| `main/bme690.c/.h`, `main/bme69x*` | the BME690 on the I2C connector: see BME690 below |")
@@ -260,7 +277,12 @@ def write_claude_md(dest, name, wifi, audio, ai, bme690, rev, idf_env, port):
              files="".join(f + "\n" for f in files), port=port or "/dev/ttyUSBx", idf=idf,
              idf_note=f" (here: through `{idf.strip()}`, a wrapper that runs a command in one)" if idf else
                       " (`export.sh`, or EIM's `activate_idf_*.sh`)",
-             rev_text=rev_text, hosted="2.12.x" if wifi == "hosted2" else "3.x")
+             rev_text=rev_text,
+             audio_port="- It runs on **I2S1**: the mic module has I2S0, the only port that can read\n"
+                        "  PDM. The boot beep was heard on the bench board on I2S1.\n" if mic else
+                        "- It runs on I2S0. Adding the mic means moving it to I2S1: the mic needs I2S0,\n"
+                        "  the only port that can read PDM.\n",
+             hosted="2.12.x" if wifi == "hosted2" else "3.x")
     def part(f):
         with open(os.path.join(CLAUDE, f)) as fh:
             return string.Template(fh.read()).substitute(v)
@@ -308,6 +330,8 @@ def main():
                     help="the AI demo: draw a digit, an int8 CNN on the P4 (ESP-DL) names it")
     ap.add_argument("--bme690", action=argparse.BooleanOptionalAction,
                     help="a BME690 sensor (temperature, humidity, pressure, gas) on the I2C connector")
+    ap.add_argument("--mic", action=argparse.BooleanOptionalAction,
+                    help="the board's PDM microphone: 16 kHz samples, a level bar")
     ap.add_argument("--chip-rev", choices=["v1", "v3", "detect"],
                     help="the P4's revision: v1 (bench board: v1.3), v3, or detect with esptool")
     ap.add_argument("--port", help="the board's UART socket, for detect / backup / flash (e.g. /dev/ttyUSB3)")
@@ -356,6 +380,9 @@ def main():
     if a.bme690 is None:
         a.bme690 = ask_yn("A BME690 sensor on the I2C connector (temperature, humidity, pressure, gas)?", False) if asking else False
 
+    if a.mic is None:
+        a.mic = ask_yn("The microphone (PDM, a sound-level bar)?", False) if asking else False
+
     if a.claude_md is None:
         a.claude_md = ask_yn("A CLAUDE.md for further development with Claude Code?", True) if asking else True
 
@@ -389,11 +416,11 @@ def main():
         backup(a.port, a.idf_env, a.backup)
     rev = detect_rev(a.port, a.idf_env) if a.chip_rev == "detect" else a.chip_rev
 
-    assemble(dest, name, wifi, a.audio, a.ai, a.bme690, rev)
+    assemble(dest, name, wifi, a.audio, a.ai, a.bme690, a.mic, rev)
     if a.claude_md:
-        write_claude_md(dest, name, wifi, a.audio, a.ai, a.bme690, rev, a.idf_env, a.port)
+        write_claude_md(dest, name, wifi, a.audio, a.ai, a.bme690, a.mic, rev, a.idf_env, a.port)
     print(f"\ncreated {dest}")
-    print(f"  project {name}; Wi-Fi: {wifi or 'none'}; audio: {'yes' if a.audio else 'no'}; AI: {'yes' if a.ai else 'no'}; BME690: {'yes' if a.bme690 else 'no'}; chip rev {rev}.x"
+    print(f"  project {name}; Wi-Fi: {wifi or 'none'}; audio: {'yes' if a.audio else 'no'}; AI: {'yes' if a.ai else 'no'}; BME690: {'yes' if a.bme690 else 'no'}; mic: {'yes' if a.mic else 'no'}; chip rev {rev}.x"
           f"{'; CLAUDE.md' if a.claude_md else ''}")
 
     if a.build:
@@ -428,6 +455,8 @@ then go through docs/advance-p4-cookbook.md step 9 on the board.""")
         print("The digit model has never run on the board: try a few drawn digits (the log shows what it saw).")
     if a.bme690:
         print("BME690: CS to 3.3 V, SDO to GND (0x76) or 3.3 V (0x77); the boot's I2C scan should list it.")
+    if a.mic:
+        print("Mic: talk near the board; the log's level should rise. A flat line means no mic on GPIO 24/26.")
     if rev == "v3":
         print("Chip rev v3.x: the sdkconfig for it is untested on hardware.")
 

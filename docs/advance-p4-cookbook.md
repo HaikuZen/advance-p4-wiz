@@ -12,7 +12,8 @@ for the Elecrow **CrowPanel Advanced 7" / 10.1"** (ESP32-P4, hardware
 
 Optional sections add **Wi-Fi** through the onboard ESP32-C6, the
 **speaker**, an **AI** demo (handwritten digits with ESP-DL) and, in step 15, a
-**BME690** environment sensor on the I2C connector. Step 14
+**BME690** environment sensor on the I2C connector, and in step 16 the **PDM
+microphone**. Step 14
 covers growing the skeleton into a real app: memory, tasks, LVGL, HTTPS, the
 microSD card, JPEG, testing. It comes from building ArtShow on this board.
 
@@ -65,7 +66,8 @@ microSD card, JPEG, testing. It comes from building ArtShow on this board.
 | backlight | GPIO 31 into an MT9201, LEDC PWM 30 kHz, 11-bit, lit from duty ~200 / 2047; flickers below ~25 % (step 14.4) |
 | touch | GT911 at 0x5d: SDA 45, SCL 46, INT 42, RST 40 |
 | other I2C | 0x2f: an STC8 battery helper. **No ES8311**, despite the schematic (see step 11) |
-| audio | plain I2S, no codec: BCLK 22, WS 21, DOUT 23, no MCLK; amps enable GPIO 30 **active low** |
+| audio | plain I2S, no codec: BCLK 22, WS 21, DOUT 23, no MCLK; amps enable GPIO 30 **active low**. On I2S0; on I2S1 with the mic (step 16) |
+| microphone | PDM, clock GPIO 24, data GPIO 26, the left slot; on I2S0, the only PDM RX port (step 16) |
 | Wi-Fi | ESP32-C6 over 4-bit SDIO: CLK 18, CMD 19, D0..D3 17 / 16 / 15 / 14, C6 enable GPIO 32 |
 | microSD | SDMMC **slot 0**, 1-bit: CLK 43, CMD 44, D0 39; IO from LDO4 at 3.3 V. Shares the SDMMC host with the C6 (step 14.6) |
 | USB | J16 is the P4's high-speed USB OTG. **VBUS is an input only** (diodes): no 5 V out, so a device must be self-powered or on a powered hub |
@@ -171,6 +173,8 @@ Notes:
 #define PIN_I2S_BCLK     22
 #define PIN_I2S_WS       21
 #define PIN_I2S_DOUT     23
+#define PIN_MIC_CLK      24     /* PDM microphone, left slot (seen on the bench board) */
+#define PIN_MIC_DATA     26
 #define PIN_BOOT_KEY     35     /* BOOT button (GPIO 0/1 are the 32 kHz crystal) */
 #define PIN_C6_EN        32     /* ESP32-C6 (Wi-Fi) enable */
 #define LDO_CHAN_DSI_PHY 3      /* P4 internal LDO3 at 2.5 V feeds the MIPI D-PHY */
@@ -1159,6 +1163,8 @@ To retrain (e.g. with your own drawings added): see the docstring of
 | SQLite "disk I/O error" after a reset | `synchronous = NORMAL` on FAT | `PRAGMA synchronous = FULL`, one connection, no WAL (14.6) |
 | the clock is set ~30 s late | SNTP's first tries ran before there was an IP | restart SNTP on each `IP_EVENT_STA_GOT_IP` (14.5) |
 | a JPEG won't decode | progressive JPEG: both decoders are baseline only | skip it and say why (14.7) |
+| the mic's level never moves, or "the data line is flat" | no mic fitted, or it talks in the other slot | check the board; the module reads both slots (step 16) |
+| `i2s_channel_init_pdm_rx_mode` fails | PDM RX on a port other than I2S0, or I2S0 taken by the speaker | the mic on I2S0, the speaker on I2S1 (step 16) |
 | no BME690 in the I2C scan | CS low or floating (SPI mode), or the connector's pins swapped | CS to 3.3 V, check the pin order with a meter (step 15) |
 | accented letters show as boxes | the built-in Montserrat fonts are ASCII only | convert fonts with Latin-1 + Latin Extended-A (14.4) |
 | a `DOTS` label wraps over the line below | `LV_LABEL_LONG_MODE_DOTS` needs a fixed height | give the label a height (14.4) |
@@ -1536,6 +1542,70 @@ Notes:
 **Check:** the log shows `bme690: BME690 at 0x76, chip id 0x61, ...`, then a
 line every 3 s, in the form `23.41 C, 45.20 %RH, 1013.25 hPa, gas 52000 ohm`. The card
 shows the same; breathe on the sensor and the humidity climbs.
+
+## 16. Optional: the PDM microphone
+
+Elecrow's wiki lists a **PDM microphone** on GPIO 24 (clock) and GPIO 26
+(data), straight to the P4, no codec. **The bench 10.1" has it** (2026-10-25):
+it talks in the left slot, and its level follows a voice (about -60 dBFS in a
+quiet room, -46 for a voice nearby, -29 for the boot beep). The same wiki
+promises an ES8311 the board doesn't have (step 11), so the mic was checked
+rather than assumed.
+
+The P4's I2S0 turns the mic's 1-bit PDM stream into PCM in hardware (PDM RX
+mode, `I2S_PDM_DATA_FMT_PCM`).
+
+- **I2S0 is the only port with PDM RX** (`SOC_I2S_PDM_MAX_RX_LINES`, "on
+  I2S0"). The mic takes it, so with the mic the speaker (step 11) moves to
+  **I2S1**: change `I2S_NUM_0` to `I2S_NUM_1` in `audio.c` (the wizard does it
+  when both are chosen). Its standard mode works on any of the three ports,
+  and the boot beep on I2S1 was heard on the bench board.
+- Pins in `board_pins.h`: `PIN_MIC_CLK 24`, `PIN_MIC_DATA 26`.
+
+### `main/mic.c/.h`
+
+From `template/modules/mic/`:
+- `mic_start()`: a PDM RX channel on I2S0, 16 kHz, 16-bit, **both slots**,
+  and a reader task (priority 4, 4 KB stack). Without the channel it logs and
+  returns; the app runs on.
+- The mic's select pin decides which slot it talks in, and Elecrow doesn't
+  say how it's strapped. The task reads both, and the first block with sound
+  picks the louder slot (`the mic is in the left slot` in the log).
+- Every 20 ms block: its level in dBFS (`mic_level_db()`), the mono samples
+  to `mic_on_block(cb)` (in the mic task: copy, don't block), a level bar
+  (`mic_ui_create`, bottom left, -80..0 dBFS) 10 times a second, and a log
+  line once a second.
+
+The channel:
+
+```c
+i2s_chan_config_t cc = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+i2s_new_channel(&cc, NULL, &s_rx);
+i2s_pdm_rx_config_t pc = {
+    .clk_cfg = I2S_PDM_RX_CLK_DEFAULT_CONFIG(MIC_RATE),
+    .slot_cfg = I2S_PDM_RX_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
+    .gpio_cfg = { .clk = PIN_MIC_CLK, .din = PIN_MIC_DATA },
+};
+i2s_channel_init_pdm_rx_mode(s_rx, &pc);
+i2s_channel_enable(s_rx);
+```
+
+### Wiring it in
+
+- copy `mic.c/.h` into `main/`;
+- in `main/CMakeLists.txt`, add `"mic.c"` to SRCS and `esp_driver_i2s` to
+  REQUIRES (once, if the speaker is there too);
+- call `mic_ui_create(lv_screen_active())` right after `build_ui()`, inside
+  the LVGL lock, and `mic_start()` at the end of `app_main`, before
+  `wifi_start()`.
+
+**Check:** the log shows `mic: PDM mic on clk 24, data 26, 16000 Hz`, then once
+a second `level -62 dBFS, peak -55` or similar. Talk near the board: the level
+and the bar rise. `the data line is flat` means no mic is fitted, or it isn't
+on these pins.
+
+For speech (wake words, commands), Espressif's ESP-SR supports the P4; feed it
+from `mic_on_block`.
 
 ## Where this came from
 

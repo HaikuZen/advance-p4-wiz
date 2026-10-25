@@ -14,10 +14,11 @@ plus the verified building blocks it assembles.
 | `docs/guide_for_agent_advance-p4.md` | ArtShow's guide for agents (2026-10): what a full app on this board taught. Merged into the cookbook as step 14; keep the two in step |
 | `template/base/` | a complete app: 1024x600 MIPI-DSI panel, GT911 touch, LVGL 9 without tearing, PWM backlight, and a demo screen (RGB bars, a touch dot, a brightness slider). Builds as is |
 | `template/modules/wifi/` | Wi-Fi through the onboard ESP32-C6 (esp_hosted): `wifi.c/h` (one Wi-Fi task: a scan, then join the network saved on screen in NVS, else the menuconfig one, and keep rejoining), `wifi_ui.c` (on-screen setup: a status button, a scan list, a password field, Forget), `Kconfig.projbuild` (the menuconfig fallback network), with config and dependency fragments for esp_hosted **2.12.x** (`*hosted2*`, recommended) or **3.x** (`*hosted3*`) |
-| `template/modules/audio/` | the speaker: plain I2S, no codec (`audio_init`, `audio_beep`) |
+| `template/modules/audio/` | the speaker: plain I2S on I2S0 (the wizard moves it to I2S1 with the mic), no codec (`audio_init`, `audio_beep`) |
+| `template/modules/mic/` | the PDM microphone (GPIO 24/26 per Elecrow's wiki): `mic.c/h`, I2S0 in PDM RX mode (the only port that can), 16 kHz, both slots read and the louder kept, a level bar, `mic_on_block` for the samples |
 | `template/modules/ai/` | AI demo: a drawing pad, and an int8 CNN that ESP-DL runs on the P4 names the digit. `models/digit.espdl` is built by `tools/train_digit_model.py` |
 | `template/modules/bme690/` | a BME690 on the I2C connector: `bme690.c/h` (finds it at 0x76/0x77 on `board_i2c_bus()`, a task reads it in forced mode every 3 s, a readings card), plus Bosch's BME69x Sensor API v1.1.0 vendored unchanged (`bme69x.c/h`, `bme69x_defs.h`, `LICENSE.bme69x`, BSD-3) |
-| `template/claude/` | the generated project's `CLAUDE.md` (`--claude-md`): `base.md` plus `wifi.md`, `audio.md`, `ai.md`, `bme690.md` for the modules chosen, filled in with `string.Template` (`$name`, `$port`, `${idf}`, ...). Keep them true to the templates when those change |
+| `template/claude/` | the generated project's `CLAUDE.md` (`--claude-md`): `base.md` plus `wifi.md`, `audio.md`, `ai.md`, `bme690.md`, `mic.md` for the modules chosen, filled in with `string.Template` (`$name`, `$port`, `${idf}`, ...). Keep them true to the templates when those change |
 | `tools/train_digit_model.py` | trains the digit CNN on MNIST (augmented toward finger strokes) and exports it with esp-ppq. Needs `tools/requirements-ai.txt` in a Python 3.12 venv; see its docstring |
 | `tools/test_digit_prep.py` | compiles the board's `digit_prep.c` on the host and scores the model on MNIST digits redrawn as the pad sees them |
 | `tools/assemble_reference.sh` | reference assembly, base + Wi-Fi + audio: exactly which lines a module adds where. The wizard must reproduce this wiring |
@@ -27,13 +28,13 @@ plus the verified building blocks it assembles.
 
 ```sh
 ./p4wiz.py                                  # interactive: asks for what isn't given
-./p4wiz.py DIR --wifi hosted2|hosted3|none --audio|--no-audio --ai|--no-ai --bme690|--no-bme690 --chip-rev v1|v3|detect -y
+./p4wiz.py DIR --wifi hosted2|hosted3|none --audio|--no-audio --ai|--no-ai --bme690|--no-bme690 --mic|--no-mic --chip-rev v1|v3|detect -y
 ./p4wiz.py DIR -y --idf-env tools/idf61.sh --build    # + set-target, build, --check
 ./p4wiz.py DIR -y --no-claude-md            # without the new project's CLAUDE.md
 ./p4wiz.py --check DIR                      # every sdkconfig.defaults line in sdkconfig?
 ```
 
-- `-y`, or no terminal: defaults for anything not given (no Wi-Fi, no audio, no AI, no BME690, rev v1, a CLAUDE.md).
+- `-y`, or no terminal: defaults for anything not given (no Wi-Fi, no audio, no AI, no BME690, no mic, rev v1, a CLAUDE.md).
 - `--name` sets the CMake project name (default: the directory name).
 - `--port` is the board's UART socket, needed by `detect`, `--backup FILE` (a full
   16 MB read) and `--flash` (flash + monitor). All three run at 460800 baud.
@@ -46,8 +47,8 @@ plus the verified building blocks it assembles.
 - It refuses paths with `[` / `]`, existing directories and invalid project names.
 - The edits fail loudly if a template anchor moves. With Wi-Fi + audio, its
   output is byte-identical to `tools/assemble_reference.sh` (apart from `.gitignore` and `CLAUDE.md`).
-  Keep the two in sync when changing the templates. The AI and BME690 modules are
-  wizard-only: the reference script doesn't add them.
+  Keep the two in sync when changing the templates. The AI, BME690 and mic modules
+  are wizard-only: the reference script doesn't add them.
 
 ### How a module plugs into the base
 
@@ -94,6 +95,16 @@ all of them.
     before `wifi_start()`.
   - Wiring: the I2C connector (SDA 45, SCL 46, 3.3 V), CS to 3.3 V, SDO to
     GND (0x76) or 3.3 V (0x77). Never a second bus on 45/46.
+- **Mic:**
+  - copy `mic.c/.h` into `main/`;
+  - in `main/CMakeLists.txt`, add `"mic.c"` to SRCS and `esp_driver_i2s` to
+    REQUIRES (once: the wizard dedupes it with the speaker's);
+  - call `mic_ui_create(lv_screen_active())` right after `build_ui()`, inside
+    the LVGL lock, and `mic_start()` at the end of `app_main`, before
+    `bme690_start()` and `wifi_start()`.
+  - The mic takes I2S0, the only PDM RX port. With audio too, change
+    `I2S_NUM_0` to `I2S_NUM_1` in the copied `audio.c` (the wizard does).
+    The pins are `PIN_MIC_CLK` / `PIN_MIC_DATA` in the base's `board_pins.h`.
 - **Project name:** set it in the root `CMakeLists.txt`, `project(my_p4_app)`.
 
 ## Verification status (2026-10-18)
@@ -122,6 +133,20 @@ all of them.
   breakout wired with 4 wires (VCC GND SCL SDA, CS and SDO left to the breakout)
   to the I2C connector **answers at 0x77** in the boot scan (2026-10-24), with
   touch unaffected. Not yet run: the module itself (callbacks, readings).
+- the mic module (2026-10-25), generated by `p4wiz.py --build`, passing
+  `--check` with no warnings: alone, and with Wi-Fi 2.12.x + audio + AI + BME690
+  (the speaker moved to I2S1 for it, in that build only).
+
+**Flashed: audio + mic + BME690 (2026-10-25)**, a wizard test build
+(`/root/.cache/p4wiz-work/p4test`), on the bench 10.1":
+- **the mic is there and works:** PDM RX on I2S0 started, the module picked the
+  **left slot**, and the level follows a voice (~-60 dBFS quiet, -46 talking
+  nearby, -29 at the boot beep);
+- **the speaker works**, on **I2S1**: the boot beep was heard. The first sound
+  confirmed by ear on IDF 6;
+- the BME690 was unplugged: the module logged `nothing at 0x76 or 0x77` once and
+  the app ran on. Its readings are still untested;
+- a clean boot: no crash or reset in 25 s.
 
 **Flashed once from an IDF 6.x build (2026-10-18)**, AI-only (base + AI module),
 on the bench 10.1":
@@ -151,7 +176,7 @@ on the bench 10.1":
   and saved the network in NVS. **Rejoins after a power-on** (2026-10-24): the
   saved network, joined ~1.3 s after the boot scan. Not yet seen: a dropped link, a wrong password, the menuconfig network. The join code also
   builds clean in Wi-Fi 2.12.x + audio + AI and Wi-Fi 3.x + audio;
-- audio: no errors in the log; the boot beep not yet confirmed by ear.
+- audio: no errors in the log (the beep was heard later, in the mic test build).
 
 The board values (pins, panel timings,
 DSI lane rate, the LDO, the backlight, the GT911 settings, the I2S audio) are
@@ -200,7 +225,9 @@ esp_hosted 3.x has not run on the board.
 
 - A CrowPanel Advanced **10.1"** V1.2 (SKU DHE04310D) on **/dev/ttyUSB3**.
 - `/dev/ttyUSB0-2` are a Huawei modem, not boards.
-- That board currently runs **ArtShow** (Wi-Fi 2.12.x + audio, 2026-10-18). Its pocket-tank
+- That board currently runs the **p4test** build (audio + mic + BME690,
+  2026-10-25), flashed over ArtShow without a backup; ArtShow's source is in
+  `../Ideas/ArtShow` (its Wi-Fi network stays in NVS). Its pocket-tank
   firmware, with the tank's saved state, is backed up in
   `/root/.cache/pocket-tank/backups/crowp4-pocket-tank-2026-10-18.bin` (restore:
   `esptool.py -p /dev/ttyUSB3 -b 460800 write_flash 0 <that file>`). Ask before

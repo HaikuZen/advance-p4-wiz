@@ -15,7 +15,8 @@ Optional modules add:
 - **the speaker**;
 - **an AI demo:** draw a digit on the screen, and a small neural network running
   on the P4 (Espressif's ESP-DL) names it;
-- **a BME690 sensor** (temperature, humidity, pressure, gas) on the I2C connector.
+- **a BME690 sensor** (temperature, humidity, pressure, gas) on the I2C connector;
+- **the microphone** (PDM): 16 kHz samples and a sound-level bar.
 
 ```sh
 ./p4wiz.py ~/projects/my_app --wifi hosted2 --audio --ai -y
@@ -49,6 +50,7 @@ Or give everything on the command line:
 | `--audio` / `--no-audio` | the speaker: plain I2S, and a beep at boot |
 | `--ai` / `--no-ai` | the handwritten-digit demo (ESP-DL). The app grows to about 2.6 MB, so the module brings its own partition table (a 6 MB app partition) |
 | `--bme690` / `--no-bme690` | a BME690 sensor on the board's I2C connector, read every 3 s, shown on a card and in the log. Wiring: VCC 3.3 V, GND, SDA, SCL, **CS to 3.3 V** (I2C mode), SDO to GND (address 0x76) or 3.3 V (0x77). See cookbook step 15 |
+| `--mic` / `--no-mic` | the board's PDM microphone (GPIO 24/26 per Elecrow): 16 kHz samples, a level bar and a level in the log. It takes I2S0, so with `--audio` too the speaker moves to I2S1 (heard working on the board). See cookbook step 16 |
 | `--chip-rev v1\|v3\|detect` | the P4's chip revision (see below). Default: `v1` |
 | `--claude-md` / `--no-claude-md` | also write a `CLAUDE.md` into the project, for further work on it with [Claude Code](https://claude.com/claude-code): its files, how to build and flash it, the board's rules and pitfalls, and a section per module chosen. Default: yes |
 | `--port PORT` | the board's serial port, needed by `detect`, `--backup` and `--flash` |
@@ -56,7 +58,7 @@ Or give everything on the command line:
 | `--build` | also build the app, then run `--check`. Needs `idf.py` on your PATH (run the wizard from an ESP-IDF terminal, step 2) or `--idf-env` |
 | `--flash` | also build, flash and open the monitor |
 | `--idf-env SCRIPT` | run the IDF commands through a wrapper script, if `idf.py` isn't on your PATH |
-| `-y` | ask nothing: anything not given takes its default (no Wi-Fi, no audio, no AI, no BME690, rev v1, a CLAUDE.md) |
+| `-y` | ask nothing: anything not given takes its default (no Wi-Fi, no audio, no AI, no BME690, no mic, rev v1, a CLAUDE.md) |
 | `--check DIR` | check a built project (see step 3) |
 
 ### The chip revision matters
@@ -220,8 +222,9 @@ Tested on a CrowPanel Advanced **10.1" V1.2** with a rev v1.3 P4, on ESP-IDF
 | AI digit demo | built, **flashed, works** (~3 ms per digit) |
 | Wi-Fi, esp_hosted 2.12.x (`hosted2`) | built, **flashed, works**: the scan, and joining a WPA2 network set on screen (IP by DHCP), and rejoining it after a power-on. The menuconfig network and reconnecting after a drop: not tried yet |
 | Wi-Fi, esp_hosted 3.x (`hosted3`) | built only |
-| speaker | built only on IDF 6. Works on the same board under IDF 5.4 |
+| speaker | **flashed, the boot beep heard** on IDF 6 on I2S1 (with `--mic`). I2S0 (without the mic): built on IDF 6, works under IDF 5.4 |
 | BME690 sensor | built; a 4-wire breakout answers at 0x77 on the board's I2C scan. The module itself not run yet |
+| microphone | built, **flashed, works**: the bench board has it (left slot), and its level follows a voice |
 | `--chip-rev v3` | built only. No rev v3 board tried |
 | 7" panel | not tried |
 
@@ -234,7 +237,7 @@ the part most likely to need fixes.**
 |---|---|
 | `p4wiz.py` | the wizard |
 | `template/base/` | the base app the wizard starts from |
-| `template/modules/` | the Wi-Fi, audio, AI and BME690 modules |
+| `template/modules/` | the Wi-Fi, audio, AI, BME690 and mic modules |
 | `template/claude/` | the parts of the CLAUDE.md that `--claude-md` writes: `base.md`, then one per module |
 | `docs/advance-p4-cookbook.md` | the same thing by hand, step by step, with every pitfall found so far. Step 14: growing the skeleton into a real app (memory, tasks, LVGL, HTTPS, microSD, JPEG, testing) |
 | `docs/guide_for_agent_advance-p4.md` | the same lessons as one guide for coding agents, from building ArtShow |

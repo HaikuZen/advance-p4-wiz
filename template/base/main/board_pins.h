@@ -12,6 +12,8 @@
 #define PIN_I2S_BCLK     22
 #define PIN_I2S_WS       21
 #define PIN_I2S_DOUT     23
+#define PIN_MIC_CLK      24     /* PDM microphone, left slot (seen on the bench board) */
+#define PIN_MIC_DATA     26
 #define PIN_BOOT_KEY     35     /* BOOT button (GPIO 0/1 are the 32 kHz crystal) */
 #define PIN_C6_EN        32     /* ESP32-C6 (Wi-Fi) enable */
 #define LDO_CHAN_DSI_PHY 3      /* P4 internal LDO3 at 2.5 V feeds the MIPI D-PHY */
